@@ -99,11 +99,6 @@ def download_audio_yt_dlp(url):
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': filename,
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
         'quiet': True,
     }
     with YoutubeDL(ydl_opts) as ydl:
