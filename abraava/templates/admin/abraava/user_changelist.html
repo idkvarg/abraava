@@ -1,0 +1,77 @@
+{% extends "admin/change_list.html" %}
+{% block content %}
+  {{ block.super }}
+{% endblock %}
+      Run iTunes Crawler
+    </button>
+  </div>
+  <div id="crawler-modal" style="display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.3);z-index:10000;">
+    <div style="background:#fff;padding:24px 24px 12px 24px;max-width:400px;margin:60px auto;border-radius:8px;position:relative;">
+      <form id="crawler-form">
+        <label for="crawler-query">iTunes Search Query:</label>
+        <input type="text" id="crawler-query" name="query" style="width:100%;margin-bottom:12px;" required>
+        <button type="submit" class="button" style="background:#0b79d0;color:#fff;">Start Crawler</button>
+        <button type="button" id="close-crawler-modal" class="button" style="margin-left:8px;">Cancel</button>
+      </form>
+      <div id="crawler-status" style="margin-top:10px;"></div>
+    </div>
+  </div>
+  <div style="margin-bottom: 20px;">
+    <h3>Latest Added Tracks</h3>
+    <ul id="latest-tracks-list"></ul>
+  </div>
+  <script>
+    function fetchLatestTracks() {
+      fetch("{% url 'admin:latest-tracks' %}")
+        .then(r => r.json())
+        .then(data => {
+          const list = document.getElementById("latest-tracks-list");
+          list.innerHTML = "";
+          data.tracks.forEach(track => {
+            const li = document.createElement("li");
+            li.textContent = `${track.title} — ${track.artist || ''} (${track.album || ''})`;
+            list.appendChild(li);
+          });
+        });
+    }
+    document.addEventListener("DOMContentLoaded", function() {
+      fetchLatestTracks();
+      setInterval(fetchLatestTracks, 5000);
+
+      const modal = document.getElementById("crawler-modal");
+      document.getElementById("open-crawler-modal").onclick = function() {
+        modal.style.display = "block";
+        document.getElementById("crawler-status").textContent = "";
+      };
+      document.getElementById("close-crawler-modal").onclick = function() {
+        modal.style.display = "none";
+      };
+      document.getElementById("crawler-form").onsubmit = function(e) {
+        e.preventDefault();
+        const query = document.getElementById("crawler-query").value;
+        const status = document.getElementById("crawler-status");
+        status.textContent = "Running crawler...";
+        fetch("{% url 'admin:crawl-itunes-ajax' %}", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "X-CSRFToken": "{{ csrf_token }}",
+          },
+          body: "query=" + encodeURIComponent(query)
+        })
+        .then(r => r.json())
+        .then(data => {
+          if (data.status === "ok") {
+            status.textContent = "Crawler finished!";
+            fetchLatestTracks();
+          } else {
+            status.textContent = "Error: " + (data.error || "Unknown error");
+          }
+        })
+        .catch(err => {
+          status.textContent = "Error: " + err;
+        });
+      };
+    });
+  </script>
+  {{ block.super }}

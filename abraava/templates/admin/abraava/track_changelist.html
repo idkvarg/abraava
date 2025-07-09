@@ -1,0 +1,83 @@
+{% extends "admin/change_list.html" %}
+{% block content %}
+  <div style="margin-bottom: 24px;">
+    <form id="crawler-form" style="display: flex; gap: 8px; align-items: flex-end;">
+      <div>
+        <label for="crawler-query" style="font-weight: bold;">iTunes Search Query:</label><br>
+        <input type="text" id="crawler-query" name="query" style="width: 260px;" required>
+      </div>
+      <button type="submit" class="button" style="background:#0b79d0;color:#fff;">Start Crawler</button>
+      <span id="crawler-status" style="margin-left: 12px; color: #0b79d0;"></span>
+    </form>
+  </div>
+  <h3>Latest Added Tracks</h3>
+  <table class="admin-table" style="width:100%;border-collapse:collapse;">
+    <thead>
+      <tr>
+        <th style="padding:6px 8px;border-bottom:1px solid #ccc;">Cover</th>
+        <th style="padding:6px 8px;border-bottom:1px solid #ccc;">Title</th>
+        <th style="padding:6px 8px;border-bottom:1px solid #ccc;">Artist</th>
+        <th style="padding:6px 8px;border-bottom:1px solid #ccc;">Album</th>
+        <th style="padding:6px 8px;border-bottom:1px solid #ccc;">Created At</th>
+      </tr>
+    </thead>
+    <tbody id="latest-tracks-list"></tbody>
+  </table>
+  <script>
+    function fetchLatestTracks() {
+      fetch("{% url 'admin:latest-tracks' %}")
+        .then(r => r.json())
+        .then(data => {
+          const tbody = document.getElementById("latest-tracks-list");
+          tbody.innerHTML = "";
+          data.tracks.forEach(track => {
+            const tr = document.createElement("tr");
+            let cover = "";
+            if (track.cover_url) {
+              cover = `<img src="${track.cover_url}" alt="cover" style="width:48px;height:48px;object-fit:cover;border-radius:4px;">`;
+            }
+            tr.innerHTML = `
+              <td style="padding:6px 8px;border-bottom:1px solid #eee;">${cover}</td>
+              <td style="padding:6px 8px;border-bottom:1px solid #eee;">${track.title || ""}</td>
+              <td style="padding:6px 8px;border-bottom:1px solid #eee;">${track.artist || ""}</td>
+              <td style="padding:6px 8px;border-bottom:1px solid #eee;">${track.album || ""}</td>
+              <td style="padding:6px 8px;border-bottom:1px solid #eee;">${track.created_at || ""}</td>
+            `;
+            tbody.appendChild(tr);
+          });
+        });
+    }
+    document.addEventListener("DOMContentLoaded", function() {
+      fetchLatestTracks();
+      setInterval(fetchLatestTracks, 5000);
+
+      document.getElementById("crawler-form").onsubmit = function(e) {
+        e.preventDefault();
+        const query = document.getElementById("crawler-query").value;
+        const status = document.getElementById("crawler-status");
+        status.textContent = "Running crawler...";
+        fetch("{% url 'admin:crawl-itunes-ajax' %}", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "X-CSRFToken": "{{ csrf_token }}",
+          },
+          body: "query=" + encodeURIComponent(query)
+        })
+        .then(r => r.json())
+        .then(data => {
+          if (data.status === "ok") {
+            status.textContent = "Crawler finished!";
+            fetchLatestTracks();
+          } else {
+            status.textContent = "Error: " + (data.error || "Unknown error");
+          }
+        })
+        .catch(err => {
+          status.textContent = "Error: " + err;
+        });
+      };
+    });
+  </script>
+  {{ block.super }}
+{% endblock %}
