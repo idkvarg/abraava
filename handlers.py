@@ -1,8 +1,7 @@
 # handlers.py
 import logging
-
 import requests
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from yt_dlp import YoutubeDL
 from uuid import uuid4
@@ -14,7 +13,6 @@ from downloads import download_and_send
 # ------------------------
 # SEARCH HANDLER
 # ------------------------
-
 
 class Searcher:
     ITUNES_URL = "https://itunes.apple.com/search"
@@ -47,7 +45,7 @@ class Searcher:
     def search(query: str):
         """Unified search across SoundCloud and iTunes"""
         results = []
-        """results.extend(Searcher.search_soundcloud(query))"""
+        # results.extend(Searcher.search_soundcloud(query))  # optional
         results.extend(Searcher.search_itunes(query, limit=10))
         return results
 
@@ -60,22 +58,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     text = update.message.text.strip()
 
-    # Check if user clicked a previous keyboard button
-    if chat_id in SEARCH_CACHE and text in SEARCH_CACHE[chat_id]:
-        url = SEARCH_CACHE[chat_id][text]
-        await update.message.reply_text(f"⏳ دریافت اطلاعات آهنگ...")
-        song_data = fetch_songlink(url)
-        if song_data:
-            fallback_url = fetch_songlink_priority_url(song_data)
-            if fallback_url:
-                await download_and_send(update, context, fallback_url)
-            else:
-                await context.bot.send_message(chat_id, "❌ هیچ لینکی برای دانلود یافت نشد.")
-        else:
-            await context.bot.send_message(chat_id, "⛔ خطا در ارتباط با Song.link")
-        return
-
-    # Regular search flow
     if not text:
         return await context.bot.send_message(chat_id, "لطفاً نام آهنگ را بفرست.")
 
@@ -88,36 +70,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         SEARCH_CACHE[chat_id] = {}
 
     keyboard = []
-    row = []
-
     for item in results[:10]:
         title = item.get("title") or item.get("trackName") or "بی‌نام"
         url = item.get("webpage_url") or item.get("trackViewUrl")
         if not url:
             continue
 
-        # Map the title to the URL in cache
         SEARCH_CACHE[chat_id][title] = url
-
-        # Add button showing the title
-        row.append(KeyboardButton(title[:30]))  # truncate to fit nicely
-        if len(row) == 2:
-            keyboard.append(row)
-            row = []
-
-    if row:
-        keyboard.append(row)
-
-    reply_markup = ReplyKeyboardMarkup(
-        keyboard,
-        resize_keyboard=True,
-        one_time_keyboard=True
-    )
+        keyboard.append([InlineKeyboardButton(title[:30], callback_data=f"resolve|{title}")])
 
     await context.bot.send_message(
         chat_id,
         "🎶 نتایج جستجو (روی نام آهنگ کلیک کنید):",
-        reply_markup=reply_markup
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
@@ -144,22 +109,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         url = fetch_songlink_priority_url(song_data)
         if url:
-            await query.edit_message_text("⬇️ در حال دانلود...")
+            await context.bot.send_message(chat_id, "⬇️ در حال دانلود...")
             await download_and_send(update, context, url)
         else:
             await context.bot.send_message(chat_id, "❌ فایل قابل دانلود نیست.")
         return
 
-    # --- Resolve song info (first show info, then allow download) ---
+    # --- Resolve song info (show info first, then allow download) ---
     elif data.startswith("resolve|"):
         sid = data.split("|", 1)[1]
-
         if chat_id not in SEARCH_CACHE or sid not in SEARCH_CACHE[chat_id]:
             await query.answer("⛔ لینک پیدا نشد.", show_alert=True)
             return
 
         url = SEARCH_CACHE[chat_id][sid]
-        await query.edit_message_text("⏳ دریافت اطلاعات آهنگ...")
 
         # Fetch song metadata
         song_data = fetch_songlink(url)
@@ -169,13 +132,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Extract iTunes metadata
         meta = extract_itunes(song_data)
+        tid = str(uuid4())
+        DOWNLOAD_CACHE[tid] = song_data
+        keyboard = []
+
         if meta:
-            tid = str(uuid4())
-            DOWNLOAD_CACHE[tid] = song_data
-
             caption = format_meta(meta)
-            keyboard = []
-
             # Preview button
             preview_url = meta.get("previewUrl")
             if preview_url:
@@ -193,13 +155,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # If no iTunes metadata, fallback to direct download link
+        # Fallback if no metadata
         fallback_url = fetch_songlink_priority_url(song_data)
         if fallback_url:
-            # Only show download button if metadata unavailable
-            tid = str(uuid4())
-            DOWNLOAD_CACHE[tid] = song_data
-            keyboard = [[InlineKeyboardButton("⬇️ دانلود آهنگ", callback_data=f"download_{tid}")]]
+            keyboard.append([InlineKeyboardButton("⬇️ دانلود آهنگ", callback_data=f"download_{tid}")])
             await context.bot.send_message(
                 chat_id,
                 "⚠️ اطلاعات کامل آهنگ موجود نیست، می‌توانید مستقیماً دانلود کنید:",
