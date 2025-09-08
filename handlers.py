@@ -75,7 +75,7 @@ async def handle_message(update, context):
         SEARCH_CACHE[chat_id][title] = url
         tid = str(uuid4())
         DOWNLOAD_CACHE[tid] = {"url": url}  # minimal entry
-        keyboard.append([InlineKeyboardButton(title[:30], callback_data=f"resolve")])
+        keyboard.append([InlineKeyboardButton(title[:30], callback_data=f"resolve|{tid}")])
 
     await context.bot.send_message(
         chat_id,
@@ -85,6 +85,7 @@ async def handle_message(update, context):
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    print("g")
     await query.answer()
     chat_id = query.message.chat.id
     data = query.data
