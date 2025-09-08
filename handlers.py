@@ -129,10 +129,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     logging.info(f"Callback received: {data}")
 
+    # --- Preview button ---
     if data.startswith("preview_"):
         url = data[8:]
         await context.bot.send_voice(chat_id, voice=url)
+        return
 
+    # --- Download button ---
     elif data.startswith("download_"):
         tid = data[9:]
         song_data = DOWNLOAD_CACHE.get(tid)
@@ -145,32 +148,41 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await download_and_send(update, context, url)
         else:
             await context.bot.send_message(chat_id, "❌ فایل قابل دانلود نیست.")
+        return
 
+    # --- Resolve song info (first show info, then allow download) ---
     elif data.startswith("resolve|"):
         sid = data.split("|", 1)[1]
+
         if chat_id not in SEARCH_CACHE or sid not in SEARCH_CACHE[chat_id]:
             await query.answer("⛔ لینک پیدا نشد.", show_alert=True)
             return
 
         url = SEARCH_CACHE[chat_id][sid]
-        await query.edit_message_text("⏳ دریافت اطلاعات...")
+        await query.edit_message_text("⏳ دریافت اطلاعات آهنگ...")
 
+        # Fetch song metadata
         song_data = fetch_songlink(url)
         if not song_data:
             await context.bot.send_message(chat_id, "⛔ خطا در ارتباط با Song.link")
             return
 
+        # Extract iTunes metadata
         meta = extract_itunes(song_data)
         if meta:
             tid = str(uuid4())
             DOWNLOAD_CACHE[tid] = song_data
-            from utils import format_meta
+
             caption = format_meta(meta)
             keyboard = []
-            preview = meta.get("previewUrl")
-            if preview:
-                keyboard.append([InlineKeyboardButton("🎧 پخش پیش‌نمایش", callback_data=f"preview_{preview}")])
-            keyboard.append([InlineKeyboardButton("⬇️ دریافت فایل", callback_data=f"download_{tid}")])
+
+            # Preview button
+            preview_url = meta.get("previewUrl")
+            if preview_url:
+                keyboard.append([InlineKeyboardButton("🎧 پخش پیش‌نمایش", callback_data=f"preview_{preview_url}")])
+
+            # Download button
+            keyboard.append([InlineKeyboardButton("⬇️ دانلود آهنگ", callback_data=f"download_{tid}")])
 
             await context.bot.send_photo(
                 chat_id=chat_id,
@@ -181,8 +193,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+        # If no iTunes metadata, fallback to direct download link
         fallback_url = fetch_songlink_priority_url(song_data)
         if fallback_url:
-            await download_and_send(update, context, fallback_url)
+            # Only show download button if metadata unavailable
+            tid = str(uuid4())
+            DOWNLOAD_CACHE[tid] = song_data
+            keyboard = [[InlineKeyboardButton("⬇️ دانلود آهنگ", callback_data=f"download_{tid}")]]
+            await context.bot.send_message(
+                chat_id,
+                "⚠️ اطلاعات کامل آهنگ موجود نیست، می‌توانید مستقیماً دانلود کنید:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         else:
             await context.bot.send_message(chat_id, "❌ هیچ لینکی برای دانلود یافت نشد.")
