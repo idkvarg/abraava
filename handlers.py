@@ -9,7 +9,6 @@ from caches import SEARCH_CACHE, DOWNLOAD_CACHE
 from utils import fetch_songlink, extract_itunes, fetch_songlink_priority_url, format_meta
 from downloads import download_and_send
 
-
 # ------------------------
 # SEARCH HANDLER
 # ------------------------
@@ -43,12 +42,10 @@ class Searcher:
 
     @staticmethod
     def search(query: str):
-        """Unified search across SoundCloud and iTunes"""
         results = []
         # results.extend(Searcher.search_soundcloud(query))  # optional
         results.extend(Searcher.search_itunes(query, limit=10))
         return results
-
 
 # ------------------------
 # TELEGRAM HANDLERS
@@ -96,18 +93,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # --- Preview button ---
     if data.startswith("preview_"):
-        url = data[8:]
-        await context.bot.send_voice(chat_id, voice=url)
+        tid = data[8:]
+        entry = DOWNLOAD_CACHE.get(tid)
+        if entry and entry.get("preview"):
+            await context.bot.send_voice(chat_id, voice=entry["preview"])
         return
 
     # --- Download button ---
     elif data.startswith("download_"):
         tid = data[9:]
-        song_data = DOWNLOAD_CACHE.get(tid)
-        if not song_data:
+        entry = DOWNLOAD_CACHE.get(tid)
+        if not entry:
             await context.bot.send_message(chat_id, "❌ لینک دانلود موجود نیست.")
             return
-        url = fetch_songlink_priority_url(song_data)
+        url = fetch_songlink_priority_url(entry["song_data"])
         if url:
             await context.bot.send_message(chat_id, "⬇️ در حال دانلود...")
             await download_and_send(update, context, url)
@@ -115,7 +114,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id, "❌ فایل قابل دانلود نیست.")
         return
 
-    # --- Resolve song info (show info first, then allow download) ---
+    # --- Resolve song info ---
     elif data.startswith("resolve|"):
         sid = data.split("|", 1)[1]
         if chat_id not in SEARCH_CACHE or sid not in SEARCH_CACHE[chat_id]:
@@ -133,16 +132,19 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Extract iTunes metadata
         meta = extract_itunes(song_data)
         tid = str(uuid4())
-        DOWNLOAD_CACHE[tid] = song_data
+        # Store both preview and song_data in cache
+        DOWNLOAD_CACHE[tid] = {
+            "song_data": song_data,
+            "preview": meta.get("previewUrl") if meta else None
+        }
+
         keyboard = []
 
         if meta:
             caption = format_meta(meta)
             # Preview button
-            preview_url = meta.get("previewUrl")
-            if preview_url:
-                keyboard.append([InlineKeyboardButton("🎧 پخش پیش‌نمایش", callback_data=f"preview_{preview_url}")])
-
+            if meta.get("previewUrl"):
+                keyboard.append([InlineKeyboardButton("🎧 پخش پیش‌نمایش", callback_data=f"preview_{tid}")])
             # Download button
             keyboard.append([InlineKeyboardButton("⬇️ دانلود آهنگ", callback_data=f"download_{tid}")])
 
