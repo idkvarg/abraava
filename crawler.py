@@ -46,7 +46,7 @@ class Crawler:
         return ([] if isinstance(sc, Exception) else sc) + ([] if isinstance(it, Exception) else it)
 
     @staticmethod
-    async def get_links_by_platform(url: str, timeout: float = 10.0) -> Optional[Dict]:
+    async def get_links(url: str, timeout: float = 10.0) -> Optional[Dict]:
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.get("https://api.song.link/v1-alpha.1/links?url=" + url.split('?')[0])
@@ -62,6 +62,7 @@ class Crawler:
             return {}
         links = songlink_data.get("linksByPlatform", {}) or {}
         itunes = links.get("itunes", {}) or {}
+        itunes = itunes["entityUniqueId"]
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 metadata = await client.get("https://itunes.apple.com/search", params={
