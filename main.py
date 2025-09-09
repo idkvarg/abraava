@@ -3,6 +3,7 @@
 Telegram music search/download bot (single-file, structured, logging).
 
 Features:
+- Handles direct links (song.link first, then direct download) and text searches.
 - Uses python-telegram-bot v20 (async).
 - Reads BOT_TOKEN from env (suitable for GitHub Secrets).
 - Searches SoundCloud (via yt-dlp) and iTunes (HTTP).
@@ -87,12 +88,11 @@ YTDL_DOWNLOAD_OPTS = {
 # ----------------------
 def cb_make(prefix: str, payload: str) -> str:
     """Create compact callback_data: prefix|payload"""
-    # Ensure the total length doesn't exceed Telegram's 64-byte limit
     full_data = f"{prefix}|{payload}"
-    if len(full_data) > 64:
+    if len(full_data.encode('utf-8')) > 64:
         # If it's too long, truncate the payload
-        max_payload_length = 64 - len(prefix) - 1  # -1 for the separator
-        payload = payload[:max_payload_length]
+        max_payload_length = 64 - len(prefix.encode('utf-8')) - 1
+        payload = payload.encode('utf-8')[:max_payload_length].decode('utf-8', 'ignore')
     return f"{prefix}|{payload}"
 
 def cb_parse(data: str) -> Tuple[str, str]:
@@ -117,7 +117,6 @@ async def fetch_text(session: aiohttp.ClientSession, url: str, params: dict = No
             resp.raise_for_status()
             return text
     except aiohttp.ClientResponseError as e:
-        # still return text when status=200 but non-JSON mime (rare), else log
         logger.warning("HTTP error fetching %s: %s", url, e)
     except Exception as e:
         logger.exception("fetch_text failed for %s: %s", url, e)
@@ -183,6 +182,7 @@ def extract_itunes_data(songlink_data: dict) -> dict:
     platforms = songlink_data.get("linksByPlatform", {}) or {}
     itunes = platforms.get("itunes", {}) or {}
     entity_id = itunes.get("entityUniqueId")
+    if not entity_id: return {}
     return (songlink_data.get("entitiesByUniqueId", {}) or {}).get(entity_id, {}) or {}
 
 def get_priority_download_url(songlink_data: dict) -> Optional[str]:
@@ -193,7 +193,7 @@ def get_priority_download_url(songlink_data: dict) -> Optional[str]:
 
 def format_song_info(metadata: dict) -> str:
     title = metadata.get("trackName") or metadata.get("title") or "Unknown Title"
-    artist = metadata.get("artistName") or metadata.get("uploader") or "Unknown Artist"
+    artist = metadata.get("artistName") or metadata.get("uploader") or metadata.get("artist") or "Unknown Artist"
     album = metadata.get("collectionName") or metadata.get("album") or "Unknown Album"
     release = (metadata.get("releaseDate") or "")[:10]
     genre = metadata.get("primaryGenreName") or metadata.get("genre") or "Unknown"
@@ -217,13 +217,11 @@ def download_media_sync(url: str, ydl_opts: dict) -> str:
     with YoutubeDL(opts) as ydl:
         ydl.download([url])
     prefix = base.split(".%(ext)s")[0]
-    # look for common extensions
     for ext in ("mp3", "m4a", "webm", "opus", "wav", "aac", "flac"):
         p = f"{prefix}.{ext}"
         if os.path.exists(p):
             logger.info("Downloaded file found: %s", p)
             return p
-    # fallback: any file with prefix
     for f in os.listdir(tempfile.gettempdir()):
         if f.startswith(os.path.basename(prefix)):
             p = os.path.join(tempfile.gettempdir(), f)
@@ -274,12 +272,9 @@ def edit_image_exif(image_bytes: bytes, metadata: dict) -> bytes:
         artist = metadata.get("artistName") or metadata.get("artist") or ""
         copyright_text = metadata.get("copyright") or ""
         desc = metadata.get("trackName") or metadata.get("title") or ""
-        if artist:
-            exif_dict["0th"][piexif.ImageIFD.Artist] = artist
-        if copyright_text:
-            exif_dict["0th"][piexif.ImageIFD.Copyright] = copyright_text
-        if desc:
-            exif_dict["0th"][piexif.ImageIFD.ImageDescription] = desc
+        if artist: exif_dict["0th"][piexif.ImageIFD.Artist] = artist.encode('utf-16le')
+        if copyright_text: exif_dict["0th"][piexif.ImageIFD.Copyright] = copyright_text.encode('utf-16le')
+        if desc: exif_dict["0th"][piexif.ImageIFD.ImageDescription] = desc.encode('utf-16le')
         exif_bytes = piexif.dump(exif_dict)
         img.save(out, format="JPEG", exif=exif_bytes, quality=95)
         return out.getvalue()
@@ -293,21 +288,37 @@ def edit_image_exif(image_bytes: bytes, metadata: dict) -> bytes:
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     logger.info("Start invoked by user=%s id=%s", user.full_name if user else None, user.id if user else None)
-    await update.message.reply_text("Hello — send a song name to search.")
+    await update.message.reply_text("Hello — send a song name to search, or a link to download.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat_id = update.effective_chat.id
+    msg_id = update.message.message_id
     text = (update.message.text or "").strip()
     logger.info("Message from user=%s id=%s text=%s", user.full_name if user else None, user.id if user else None, text)
     if not text:
-        await update.message.reply_text("Send a song name.")
+        await update.message.reply_text("Send a song name or a valid URL.")
         return
 
-    # Typing...
-    await context.bot.send_chat_action(chat_id, action=constants.ChatAction.TYPING)
+    # --- NEW: Handle URLs first ---
+    if text.lower().startswith("http"):
+        await context.bot.send_chat_action(chat_id, action=constants.ChatAction.TYPING)
+        songlink_data = await fetch_songlink(text)
+        
+        if songlink_data:
+            # song.link found data, proceed with metadata flow
+            logger.info("song.link successful for URL: %s", text)
+            itunes_meta = extract_itunes_data(songlink_data)
+            await send_song_details(context, chat_id, itunes_meta, songlink_data, reply_to_message_id=msg_id)
+        else:
+            # song.link failed, fallback to direct download
+            logger.warning("song.link failed for URL: %s. Falling back to direct download.", text)
+            await update.message.reply_text("Couldn't find metadata. Trying a direct download...")
+            context.application.create_task(worker_download_and_send(context, chat_id, text, {}, msg_id))
+        return
 
-    # Run searches in parallel
+    # --- Original logic for text search ---
+    await context.bot.send_chat_action(chat_id, action=constants.ChatAction.TYPING)
     soundcloud_task = asyncio.create_task(search_soundcloud(text))
     itunes_task = asyncio.create_task(search_itunes(text))
     soundcloud_results, itunes_results = await asyncio.gather(soundcloud_task, itunes_task)
@@ -317,134 +328,146 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info("No search results for query=%s", text)
         return
 
-    # Cache
     search_id = str(uuid4())
     SEARCH_CACHE[search_id] = {"results": combined[:8], "timestamp": time.time(), "query": text}
     logger.info("Cached search_id=%s for query=%s results=%d", search_id, text, len(combined))
 
-    # Build keyboard
     buttons = []
     for idx, item in enumerate(combined[:8], start=1):
         title = item.get("title") or item.get("trackName") or "Unknown Title"
         artist = item.get("uploader") or item.get("artistName") or "Unknown Artist"
         label = f"{idx}. {title[:30]} - {artist[:20]}"
-        # Use index only in callback data to avoid exceeding Telegram's 64-byte limit
         payload = f"{search_id}:{idx-1}"
         buttons.append([InlineKeyboardButton(label, callback_data=cb_make("select", payload))])
     buttons.append([InlineKeyboardButton("🔍 New Search", callback_data="new_search")])
     keyboard = InlineKeyboardMarkup(buttons)
     await update.message.reply_text(f"Found {len(combined)} results for *{text}*", parse_mode="Markdown", reply_markup=keyboard)
 
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    if not query:
-        return
+    if not query: return
     await query.answer()
+    
     prefix, payload = cb_parse(query.data)
     user = query.from_user
     chat_id = query.message.chat.id
     msg_id = query.message.message_id
     logger.info("Callback from user=%s prefix=%s payload=%s", user.id if user else None, prefix, payload)
 
-    if prefix in ("new_search", "search_again"):
-        await context.bot.send_message(chat_id, "Send a new search query.")
-        return
+    try:
+        if prefix in ("new_search", "search_again"):
+            await context.bot.send_message(chat_id, "Send a new search query.")
+            return
 
-    if prefix == "preview":
-        preview_url = payload
-        logger.info("Preview requested: %s", preview_url)
-        try:
-            await context.bot.send_audio(chat_id, audio=preview_url, reply_to_message_id=msg_id)
-        except Exception:
-            logger.exception("Failed to send preview")
-            await context.bot.send_message(chat_id, "Unable to play preview.")
-        return
+        if prefix == "preview":
+            preview_url = payload
+            logger.info("Preview requested: %s", preview_url)
+            try:
+                await context.bot.send_audio(chat_id, audio=preview_url, reply_to_message_id=msg_id)
+            except Exception as e:
+                logger.exception("Failed to send preview")
+                await context.bot.send_message(chat_id, "Unable to play preview.")
+            return
 
-    if prefix == "download":
-        download_id = payload
-        logger.info("Download requested download_id=%s", download_id)
-        songlink_data = DOWNLOAD_LINKS_CACHE.get(download_id)
-        if not songlink_data:
-            await context.bot.send_message(chat_id, "Download expired. Search again.")
-            return
-        dl_url = get_priority_download_url(songlink_data)
-        if not dl_url:
-            await context.bot.send_message(chat_id, "No download available.")
-            return
-        itunes_meta = extract_itunes_data(songlink_data) or {}
-        # Launch background task
-        context.application.create_task(worker_download_and_send(context, chat_id, dl_url, itunes_meta, msg_id))
-        return
-
-    if prefix == "select":
-        # payload encoded as "search_id:idx"
-        if ":" not in payload:
-            logger.warning("Malformed select payload=%s", payload)
-            return
-        search_id, idx_str = payload.split(":", 1)
-        try:
-            idx = int(idx_str)
-        except ValueError:
-            logger.warning("Invalid index in payload=%s", payload)
-            return
-        search_data = SEARCH_CACHE.get(search_id)
-        if not search_data:
-            await context.bot.send_message(chat_id, "Search expired. Start a new search.")
-            return
-        results = search_data["results"]
-        if idx >= len(results):
-            await context.bot.send_message(chat_id, "Invalid selection.")
-            return
-        item = results[idx]
-        item_url = item.get("webpage_url") or item.get("trackViewUrl")
-        if not item_url:
-            await context.bot.send_message(chat_id, "No URL found for this track.")
-            return
-        await context.bot.send_chat_action(chat_id, action=constants.ChatAction.TYPING)
-        songlink_data = await fetch_songlink(item_url)
-        if not songlink_data:
-            await context.bot.send_message(chat_id, "Failed to fetch track info.")
-            return
-        itunes_meta = extract_itunes_data(songlink_data)
-        if itunes_meta:
-            # store download link in cache for later
-            dl_id = str(uuid4())
-            DOWNLOAD_LINKS_CACHE[dl_id] = songlink_data
-            # send song details with buttons referencing dl_id
-            await send_song_details(context, chat_id, itunes_meta, songlink_data, reply_to_message_id=msg_id)
-        else:
+        if prefix == "download":
+            download_id = payload
+            logger.info("Download requested download_id=%s", download_id)
+            songlink_data = DOWNLOAD_LINKS_CACHE.get(download_id)
+            if not songlink_data:
+                await context.bot.edit_message_text("Download link expired. Please search again.", chat_id=chat_id, message_id=msg_id)
+                return
             dl_url = get_priority_download_url(songlink_data)
-            if dl_url:
-                context.application.create_task(worker_download_and_send(context, chat_id, dl_url, {}, msg_id))
-            else:
-                await context.bot.send_message(chat_id, "No download available for this track.")
+            if not dl_url:
+                await context.bot.send_message(chat_id, "No download source (YouTube/SoundCloud) available for this track.")
+                return
+            itunes_meta = extract_itunes_data(songlink_data)
+            context.application.create_task(worker_download_and_send(context, chat_id, dl_url, itunes_meta, msg_id))
+            await context.bot.edit_message_reply_markup(chat_id=chat_id, message_id=msg_id, reply_markup=None) # remove buttons after click
+            return
+
+        if prefix == "select":
+            if ":" not in payload:
+                logger.warning("Malformed select payload=%s", payload)
+                return
+            search_id, idx_str = payload.split(":", 1)
+            
+            try:
+                idx = int(idx_str)
+            except ValueError:
+                logger.warning("Invalid index in payload=%s", payload)
+                return
+
+            search_data = SEARCH_CACHE.get(search_id)
+            if not search_data:
+                await context.bot.edit_message_text("Search expired. Please start a new search.", chat_id=chat_id, message_id=msg_id)
+                return
+
+            results = search_data["results"]
+            if idx >= len(results):
+                await context.bot.send_message(chat_id, "Invalid selection.")
+                return
+
+            item = results[idx]
+            item_url = item.get("webpage_url") or item.get("trackViewUrl")
+            if not item_url:
+                logger.warning("No URL found for selected item: %s", item)
+                await context.bot.send_message(chat_id, "Could not find a link for this item. Please try another.")
+                return
+            
+            await context.bot.send_chat_action(chat_id, action=constants.ChatAction.TYPING)
+            songlink_data = await fetch_songlink(item_url)
+            
+            if not songlink_data:
+                await context.bot.send_message(chat_id, "Failed to fetch track info. Trying a direct download...")
+                context.application.create_task(worker_download_and_send(context, chat_id, item_url, {}, msg_id))
+                return
+            
+            itunes_meta = extract_itunes_data(songlink_data)
+            await send_song_details(context, chat_id, itunes_meta, songlink_data, reply_to_message_id=msg_id)
+            # Remove the old search results message
+            await context.bot.delete_message(chat_id, msg_id)
+
+    except Exception as e:
+        logger.exception("An error occurred in handle_callback")
+        try:
+            await context.bot.send_message(chat_id, f"An unexpected error occurred: {e}")
+        except:
+            pass # Failsafe
 
 # Helper to send song info and buttons
 async def send_song_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int, metadata: dict, songlink_data: dict, reply_to_message_id: Optional[int] = None):
+    # If itunes_meta was empty, build a generic one from songlink data
+    if not metadata:
+        entity_key = songlink_data.get("pageUrlEntityUniqueId")
+        if entity_key:
+            main_entity = songlink_data.get("entitiesByUniqueId", {}).get(entity_key, {})
+            metadata['title'] = main_entity.get('title')
+            metadata['artist'] = main_entity.get('artistName')
+            metadata['artworkUrl100'] = main_entity.get('thumbnailUrl')
+    
     caption = format_song_info(metadata)
-    artwork = (metadata.get("artworkUrl100") or "").replace("100x100", "600x600")
+    artwork_url = (metadata.get("artworkUrl100") or "").replace("100x100", "600x600")
     download_id = str(uuid4())
     DOWNLOAD_LINKS_CACHE[download_id] = songlink_data
-    preview = metadata.get("previewUrl")
-    download_url = get_priority_download_url(songlink_data)
+    preview_url = metadata.get("previewUrl")
+    download_available = get_priority_download_url(songlink_data)
 
     buttons_row = []
-    if preview:
-        # Use a short callback data for preview
-        buttons_row.append(InlineKeyboardButton("🎧 Preview", callback_data=cb_make("preview", preview)))
-    if download_url:
-        # Use a UUID for download callback to keep it short
+    if preview_url:
+        buttons_row.append(InlineKeyboardButton("🎧 Preview", callback_data=cb_make("preview", preview_url)))
+    if download_available:
         buttons_row.append(InlineKeyboardButton("⬇️ Download", callback_data=cb_make("download", download_id)))
     buttons_row.append(InlineKeyboardButton("🔍 Search Again", callback_data="search_again"))
     keyboard = InlineKeyboardMarkup([buttons_row])
 
     photo_bytes = None
-    if artwork:
+    if artwork_url:
         async with aiohttp.ClientSession() as session:
-            tmp = await fetch_bytes(session, artwork)
+            tmp = await fetch_bytes(session, artwork_url)
             if tmp:
                 photo_bytes = edit_image_exif(tmp, metadata)
-
+    
     try:
         if photo_bytes:
             bio = BytesIO(photo_bytes); bio.name = "cover.jpg"
@@ -463,29 +486,33 @@ async def worker_download_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: 
     mp3_path = None
     try:
         mp3_path = await download_media(url, YTDL_DOWNLOAD_OPTS)
-        # fetch cover if possible
         cover_bytes = None
-        art = (metadata.get("artworkUrl100") or "").replace("100x100", "600x600")
-        if art:
+        art_url = (metadata.get("artworkUrl100") or "").replace("100x100", "600x600")
+        if art_url:
             async with aiohttp.ClientSession() as session:
-                cover_bytes = await fetch_bytes(session, art)
-        if mp3_path.lower().endswith(".mp3"):
-            embed_id3(mp3_path, metadata, cover_bytes)
-        else:
-            # still try to tag if possible
-            try:
-                embed_id3(mp3_path, metadata, cover_bytes)
-            except Exception:
-                logger.debug("Skipping ID3 embed for non-mp3 file %s", mp3_path)
-        # send audio
+                cover_bytes = await fetch_bytes(session, art_url)
+        
+        embed_id3(mp3_path, metadata, cover_bytes)
+        
         with open(mp3_path, "rb") as fh:
-            await context.bot.send_audio(chat_id, audio=InputFile(fh, filename=os.path.basename(mp3_path)), caption="✅ Download completed!", reply_to_message_id=reply_to_message_id)
+            filename = os.path.basename(mp3_path)
+            # Try to create a better filename if metadata exists
+            if metadata.get('artist') and metadata.get('title'):
+                filename = f"{metadata['artist']} - {metadata['title']}.mp3"
+
+            await context.bot.send_audio(
+                chat_id, 
+                audio=InputFile(fh, filename=filename), 
+                caption="✅ Download completed!", 
+                reply_to_message_id=reply_to_message_id,
+                thumbnail=cover_bytes
+            )
         await context.bot.delete_message(chat_id, status_msg.message_id)
         logger.info("Sent audio to chat_id=%s", chat_id)
     except Exception as e:
         logger.exception("Download/send failed: %s", e)
         try:
-            await context.bot.edit_message_text(chat_id=chat_id, message_id=status_msg.message_id, text=f"❌ Error: {e}")
+            await context.bot.edit_message_text(chat_id=chat_id, message_id=status_msg.message_id, text=f"❌ Error: Could not process the request.")
         except Exception:
             logger.exception("Failed updating error message")
     finally:
