@@ -72,7 +72,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     user_lang = context.user_data.get("lang", "en")
     action, payload = cb_parse(query.data)
-
+    logger.log(payload)
     if action == "info":
         if not payload:
             await query.edit_message_text(translate("error", user_lang))
@@ -100,7 +100,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await worker_download_and_send(context, query.message.chat_id, payload)
 
     elif action == "preview":
-        await context.bot.send_audio(query.message.chat_id,audio=payload)
+        await context.bot.send_audio(query.message.chat_id, audio=payload)
 
     else:
         await query.edit_message_text(translate("error", user_lang))
