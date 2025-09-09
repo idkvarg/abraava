@@ -57,15 +57,21 @@ class Crawler:
             return None
 
     @staticmethod
-    def extract_metadata(songlink_data: Optional[Dict]) -> Dict:
+    async def extract_metadata(songlink_data: Optional[Dict]) -> Dict:
         if not songlink_data:
             return {}
         links = songlink_data.get("linksByPlatform", {}) or {}
         itunes = links.get("itunes", {}) or {}
-        entity_id = itunes.get("entityUniqueId")
-        if not entity_id:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                metadata = await client.get("https://itunes.apple.com/search", params={
+                    "term": itunes, "media": "music", "limit": 1
+                })
+                metadata.raise_for_status()
+                metadata = metadata.json().get("results", [])
+        except Exception as e:
+            logger.error("iTunes search failed: %s", e)
             return {}
-        return songlink_data.get("entitiesByUniqueId", {}).get(entity_id, {}) or {}
 
     @staticmethod
     def get_download_link(songlink_data: Optional[Dict]):
