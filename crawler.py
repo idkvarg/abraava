@@ -82,6 +82,5 @@ class Crawler:
 
     @staticmethod
     def get_download_link(songlink_data: Optional[Dict]):
-        links = songlink_data.get("linksByPlatform", {}) or {}
-        download_link = links.get("soundcloud", links.get("youtube", ""))
+        download_link = "d"
         return download_link
