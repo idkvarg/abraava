@@ -1,83 +1,119 @@
 import logging
 import os
 from uuid import uuid4
-
 import httpx
-from pyrogram.filters import inline_keyboard
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.ext import ContextTypes
-from utils import is_valid_url, cb_make, cb_parse
+from utils import is_valid_url, cb_make, cb_parse, convert_results_to_buttons
 from crawler import Crawler
 from downloader import download_audio, embed_id3_tags, edit_cover_exif
-from i18 import translate
+from i18n import translate
 
 logger = logging.getLogger("abraava.handlers")
 
-import spotipy
-from spotipy.oauth2 import SpotifyOAuth
-
-os.environ['SPOTIPY_CLIENT_ID'] = '7c8cce55a7654445a5357aabf580835a'
-os.environ['SPOTIPY_CLIENT_SECRET'] = '0369e3d79918441c9916c6dcc55f6a2a'
-os.environ['SPOTIPY_REDIRECT_URI'] = 'http://localhost:8888/callback'
-
 
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    lang = context.user_data.get("lang", "fa")
-    message = update.message
-    print(translate("start", "fa"))
-    await message.reply_text(translate("start", "fa"))
-
-
-async def handle_scloud(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    lang = context.user_data.get("lang", "en")
-    message = update.message
-    await message.reply_text(translate("start", lang))
+    await update.message.reply_text(translate("start", context=context))
 
 
 async def handle_itunes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    lang = context.user_data.get("lang", "en")
     message = update.message
-    results = await Crawler.Itunes.search(message.text.split(maxsplit=1)[1])
-    buttons = []
-    for result in results:
-        buttons.append(
-            [InlineKeyboardButton(result['title'] + " " + result["artist"],
-                                  callback_data=cb_make("preview", result['url']))])
-    await message.reply_text(translate("start", lang), reply_markup=InlineKeyboardMarkup(buttons))
+    query = message.text.split(maxsplit=1)[1] if len(message.text.split(maxsplit=1)) > 1 else ""
+    if not query:
+        await message.reply_text(translate("send_query", context=context))
+        return
+
+    results = await Crawler.Itunes.search(query)
+    if not results:
+        await message.reply_text(translate("no_results", context=context))
+        return
+
+    buttons = convert_results_to_buttons(results)
+    await message.reply_text(translate("search.itunes", context=context), reply_markup=buttons)
 
 
-async def handle_ytmusic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    lang = context.user_data.get("lang", "en")
+async def handle_spotify(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.message
-    await message.reply_text(translate("start", lang))
+    query = message.text.split(maxsplit=1)[1] if len(message.text.split(maxsplit=1)) > 1 else ""
+    if not query:
+        await message.reply_text(translate("send_query", context=context))
+        return
+
+    results = await Crawler.Spotify.search(query)
+    if not results:
+        await message.reply_text(translate("no_results", context=context))
+        return
+
+    buttons = convert_results_to_buttons(results)
+    await message.reply_text(translate("search.spotify", context=context), reply_markup=buttons)
 
 
 async def handle_deezer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    lang = context.user_data.get("lang", "en")
     message = update.message
-    await message.reply_text(translate("start", lang))
+    query = message.text.split(maxsplit=1)[1] if len(message.text.split(maxsplit=1)) > 1 else ""
+    if not query:
+        await message.reply_text(translate("send_query", context=context))
+        return
+
+    results = await Crawler.Deezer.search(query)
+    if not results:
+        await message.reply_text(translate("no_results", context=context))
+        return
+
+    buttons = convert_results_to_buttons(results)
+    await message.reply_text(translate("search.deezer", context=context), reply_markup=buttons)
+
+
+async def handle_scloud(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.message
+    query = message.text.split(maxsplit=1)[1] if len(message.text.split(maxsplit=1)) > 1 else ""
+    if not query:
+        await message.reply_text(translate("send_query", context=context))
+        return
+
+    results = await Crawler.SoundCloud.search(query)
+    if not results:
+        await message.reply_text(translate("no_results", context=context))
+        return
+
+    buttons = convert_results_to_buttons(results)
+    await message.reply_text(translate("search.scloud", context=context), reply_markup=buttons)
+
+
+async def handle_ytmusic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.message
+    query = message.text.split(maxsplit=1)[1] if len(message.text.split(maxsplit=1)) > 1 else ""
+    if not query:
+        await message.reply_text(translate("send_query", context=context))
+        return
+
+    results = await Crawler.YTMusic.search(query)
+    if not results:
+        await message.reply_text(translate("no_results", context=context))
+        return
+
+    buttons = convert_results_to_buttons(results)
+    await message.reply_text(translate("search.ytmusic", context=context), reply_markup=buttons)
 
 
 async def handle_setting(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    lang = context.user_data.get("lang", "en")
     message = update.message
-    await message.reply_text(translate("start", lang))
+    await message.reply_text(translate("start", context=context))
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    lang = context.user_data.get("lang", "en")
     message = update.message
     text = (message.text or "").strip()
 
     if len(text) == 0:
-        await update.message.reply_text(translate("send_query", lang), parse_mode="Markdown")
+        await update.message.reply_text(translate("send_query", context=context), parse_mode="Markdown")
         return
 
     # URL case
     if is_valid_url(text):
         metadata = Crawler.extract_metadata(text)
         if not metadata:
-            await update.message.reply_text(translate("error", lang))
+            await update.message.reply_text(translate("error", context=context))
             return
 
         track_id = str(uuid4())
@@ -93,9 +129,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     # Search case
-    results = await Crawler.search(text, limit=5)
+    results = await Crawler.search(text)
     if not results:
-        await update.message.reply_text(translate("no_results", lang))
+        await update.message.reply_text(translate("no_results", context=context))
         return
 
     buttons = []
@@ -113,12 +149,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not query:
         return
     await query.answer()
-
-    user_lang = context.user_data.get("lang", "en")
     action, payload = cb_parse(query.data)
     if action == "info":
         if not payload:
-            await query.edit_message_text(translate("error", user_lang))
+            await query.edit_message_text(translate("error", context=context))
             return
 
         links = await Crawler.get_links(payload)
@@ -148,14 +182,14 @@ Track id:1D5Rgb6p3sg5E2OW8kBA9f
 """
 
     elif action == "download":
-        await query.edit_message_text(translate("downloading", user_lang))
+        await query.edit_message_text(translate("downloading", context=context))
         await worker_download_and_send(context, query.message.chat_id, payload)
 
     elif action == "preview":
         await context.bot.send_audio(query.message.chat_id, audio=payload)
 
     else:
-        await query.edit_message_text(translate("error", user_lang))
+        await query.edit_message_text(translate("error", context=context))
 
 
 async def worker_download_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int, url: str):

@@ -8,3 +8,18 @@ msgstr "Start"
 
 msgid "menu.settings"
 msgstr "Setting"
+
+msgid "search.itunes"
+msgstr "🔍 Results from Itunes:"
+
+msgid "search.ytmusic"
+msgstr "🔍 Results from Youtube Music:"
+
+msgid "search.scloud"
+msgstr "🔍 Results from Soundcloud:"
+
+msgid "search.spotify"
+msgstr "🔍 Results from Spotify:"
+
+msgid "search.deezer"
+msgstr "🔍 Results from Deezer:"

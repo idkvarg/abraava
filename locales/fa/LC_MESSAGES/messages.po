@@ -8,3 +8,18 @@ msgstr "شروع"
 
 msgid "menu.settings"
 msgstr "تنظیمات"
+
+msgid "search.itunes"
+msgstr "🔍 نتایج جستجو در آیتیونز (اپل موزیک):"
+
+msgid "search.ytmusic"
+msgstr "🔍 نتایج جستجو در یوتیوب موزیک:"
+
+msgid "search.scloud"
+msgstr "🔍 نتایج جستجو در ساندکلاود:"
+
+msgid "search.spotify"
+msgstr "🔍 نتایج جستجو در اسپاتیفای:"
+
+msgid "search.deezer"
+msgstr "🔍 نتایج جستجو در دیزر:"

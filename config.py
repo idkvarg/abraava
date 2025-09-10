@@ -19,6 +19,10 @@ logger = logging.getLogger("abraava")
 SEARCH_CACHE = TTLCache(maxsize=1000, ttl=3600)
 DOWNLOAD_LINKS_CACHE = TTLCache(maxsize=1000, ttl=3600)
 
+os.environ['SPOTIPY_CLIENT_ID'] = '7c8cce55a7654445a5357aabf580835a'
+os.environ['SPOTIPY_CLIENT_SECRET'] = '0369e3d79918441c9916c6dcc55f6a2a'
+SPOTIPY_CLIENT_ID = os.environ.get('SPOTIPY_CLIENT_ID')
+SPOTIFY_CLIENT_SECRET = os.environ.get('SPOTIPY_CLIENT_SECRET')
 YTDL_EXTRACT_OPTS = {"quiet": True, "extract_flat": True, "skip_download": True}
 YTDL_DOWNLOAD_OPTS = {
     "format": "bestaudio/best",
