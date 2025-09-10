@@ -8,7 +8,7 @@ SPOTIPY_CLIENT_ID = os.environ.get('SPOTIPY_CLIENT_ID')
 SPOTIFY_CLIENT_SECRET = os.environ.get('SPOTIPY_CLIENT_SECRET')
 
 if not TG_BOT_TOKEN:
-    print("BOT_TOKEN environment variable not set", file=sys.stderr)
+    print("TG_BOT_TOKEN environment variable not set", file=sys.stderr)
     sys.exit(1)
 
 logging.basicConfig(
