@@ -303,6 +303,7 @@ class Crawler:
             return {"original": url}
 
     @staticmethod
-    def get_download_link(links: Dict[str, str]) -> str:
-        # Return the first link available
-        return str(links)
+    async def get_download_link(link) -> str:
+        link = await Crawler.get_links(link)
+        print(link)
+        return str(link)
