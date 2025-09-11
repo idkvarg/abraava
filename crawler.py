@@ -304,6 +304,6 @@ class Crawler:
 
     @staticmethod
     async def get_download_link(link) -> str:
-        link = await Crawler.get_links(link)
-        print(link)
+        dlink = await Crawler.get_links(link)
+        print(dlink)
         return str(link)
