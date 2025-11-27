@@ -54,14 +54,14 @@ async def send_song_info(context: ContextTypes.DEFAULT_TYPE, chat_id: int, track
                 chat_id=chat_id,
                 photo=metadata["coverUrl"],
                 caption=f"""
-🎧 Title: <code>{metadata.get("title", "Unknown")}</code>
-🎤 Artist: <code>{metadata.get("artist", "Unknown")}</code>
-💽 Album: <code>{metadata.get("album", "Unknown")}</code>
-🗓 Release Year: <code>{metadata.get("releaseDate", "Unknown")}</code>
-🌐 ISRC: <code>{metadata.get("isrc", "Unknown")}</code>
+ 🎧 Title: <code>{metadata.get("title", "Unknown")}</code>
+ 🎤 Artist: <code>{metadata.get("artist", "Unknown")}</code>
+ 💽 Album: <code>{metadata.get("album", "Unknown")}</code>
+ 🗓 Release Year: <code>{metadata.get("releaseDate", "Unknown")}</code>
+ 🌐 ISRC: <code>{metadata.get("isrc", "Unknown")}</code>
 
-🔗 Link: {track_id_or_url}
-""",
+ 🔗 Link: {track_id_or_url}
+ """,
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(buttons),
             )
@@ -69,12 +69,12 @@ async def send_song_info(context: ContextTypes.DEFAULT_TYPE, chat_id: int, track
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=f"""
-🎧 {metadata.get("title", "Unknown")}
-🎤 {metadata.get("artist", "Unknown")}
-💽 {metadata.get("album", "Unknown")}
-🗓 {metadata.get("releaseDate", "Unknown")}
-🌐 ISRC: {metadata.get("isrc", "")}
-""",
+ 🎧 {metadata.get("title", "Unknown")}
+ 🎤 {metadata.get("artist", "Unknown")}
+ 💽 {metadata.get("album", "Unknown")}
+ 🗓 {metadata.get("releaseDate", "Unknown")}
+ 🌐 ISRC: {metadata.get("isrc", "")}
+ """,
                 reply_markup=InlineKeyboardMarkup(buttons),
             )
     except Exception as e:
@@ -179,6 +179,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ----------------- Callback Handler -----------------
+
+async def _edit_query_text_or_caption(query, text, reply_markup=None, parse_mode=None):
+    """
+    Edit the message text if the message has text, otherwise edit the caption (for photo/media).
+    Falls back to editing only reply_markup if full edit fails.
+    """
+    message = query.message
+    try:
+        if getattr(message, "text", None) is not None:
+            # message has text - edit text
+            await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        else:
+            # message likely has media with a caption - edit caption
+            # Message.edit_caption will update the caption and the reply_markup
+            await message.edit_caption(caption=text, reply_markup=reply_markup, parse_mode=parse_mode)
+    except Exception:
+        logger.exception("Failed to edit message text/caption; trying to update reply_markup as fallback")
+        try:
+            await query.edit_message_reply_markup(reply_markup=reply_markup)
+        except Exception:
+            logger.exception("Failed to edit reply_markup as fallback")
+
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not query:
@@ -201,30 +224,28 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif platform == "ytmusic":
             results = await Crawler.YTMusic.search(query_text, page=page)
         else:
-            await query.edit_message_text("❌ Unknown platform")
+            await _edit_query_text_or_caption(query, "❌ Unknown platform")
             return
 
         buttons = build_pagination_buttons(results, query_text, page, platform)
-        await query.edit_message_text(
-            translate(f'search.{platform}', context=context),
-            reply_markup=buttons
-        )
+        await _edit_query_text_or_caption(query, translate(f'search.{platform}', context=context), reply_markup=buttons)
 
     elif action == "info":
         if not payload:
-            await query.edit_message_text(translate("error", context=context))
+            await _edit_query_text_or_caption(query, translate("error", context=context))
             return
         await send_song_info(context, query.from_user.id, payload)
 
     elif action == "download":
-        await query.edit_message_text(translate("downloading", context=context))
+        # Use the safe editor which handles both text messages and media captions
+        await _edit_query_text_or_caption(query, translate("downloading", context=context))
         await worker_download_and_send(context, query.message.chat_id, payload)
 
     elif action == "preview":
         await context.bot.send_audio(query.message.chat_id, audio=payload)
 
     else:
-        await query.edit_message_text(translate("error", context=context))
+        await _edit_query_text_or_caption(query, translate("error", context=context))
 
 
 # ----------------- Download Worker -----------------
