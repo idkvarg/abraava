@@ -202,6 +202,11 @@ class Crawler:
     @staticmethod
     async def extract_metadata(url: str) -> Optional[Dict[str, Any]]:
         try:
+            # Guard against missing/invalid url early to avoid passing None to yt-dlp
+            if not url:
+                logger.error("extract_metadata called with empty/None url. Caller should provide a valid URL.")
+                return None
+
             parsed = urlparse(url)
             hostname = parsed.hostname.lower() if parsed.hostname else ""
 
