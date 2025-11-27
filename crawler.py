@@ -1,41 +1,43 @@
 import asyncio
 import logging
 import re
-from typing import List, Dict, Any, Optional
-from urllib.parse import urlparse, parse_qs
+import hashlib
+from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import httpx
 from yt_dlp import YoutubeDL
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
 import deezer
-from config import SPOTIPY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, YTDL_EXTRACT_OPTS
 
-logger = logging.getLogger("abraava.Crawler")
+from config import (
+    SPOTIPY_CLIENT_ID,
+    SPOTIFY_CLIENT_SECRET,
+    YTDL_EXTRACT_OPTS,
+    DOWNLOAD_LINKS_CACHE,
+)
+
+logger = logging.getLogger("abraava.crawler")
 
 
 class Crawler:
-    ################
-    # Prettify Results #
-    ################
+    """
+    Unified crawler / search helper for multiple music platforms.
+    Contains nested platform helpers (SoundCloud, YTMusic, Itunes, Spotify, Deezer)
+    and utilities to extract metadata and resolve download links (via Song.link).
+    """
+
     @staticmethod
     def _prettify_results(raw_results: Any, platform: str) -> List[Dict[str, Any]]:
-        results = []
+        """
+        Convert raw results from different sources into a common concise dict format:
+        { title, url, artist, album, coverUrl }
+        """
+        results: List[Dict[str, Any]] = []
 
-        if platform == "itunes":
-            data = raw_results.json().get("results", []) if hasattr(raw_results, 'json') else []
-            for r in data:
-                if r.get("wrapperType") == "track":
-                    results.append({
-                        "title": r.get("trackName"),
-                        "url": r.get("trackViewUrl"),
-                        "artist": r.get("artistName"),
-                        "album": r.get("collectionName"),
-                        "coverUrl": r.get("artworkUrl100"),
-                        "trackId": r.get("trackId")
-                    })
-
-        elif platform == "spotify":
+        if platform == "spotify":
+            # spotipy search returns dict with 'tracks' -> 'items'
             items = raw_results.get("tracks", {}).get("items", []) if isinstance(raw_results, dict) else []
             for t in items:
                 results.append({
@@ -57,6 +59,7 @@ class Crawler:
                 })
 
         elif platform in ["soundcloud", "ytmusic"]:
+            # results from yt-dlp extract_info (search) return list of dicts
             for t in raw_results:
                 results.append({
                     "title": t.get("title"),
@@ -64,6 +67,22 @@ class Crawler:
                     "artist": t.get("uploader"),
                     "album": t.get("album") or "",
                     "coverUrl": t.get("thumbnail") or "",
+                })
+
+        elif platform == "itunes":
+            # pass-through the httpx.Response or dict returned by iTunes API
+            items = []
+            if isinstance(raw_results, dict):
+                items = raw_results.get("results", [])
+            elif hasattr(raw_results, "json"):
+                items = raw_results.json().get("results", [])
+            for t in items:
+                results.append({
+                    "title": t.get("trackName") or t.get("collectionName"),
+                    "url": t.get("trackViewUrl") or t.get("collectionViewUrl"),
+                    "artist": t.get("artistName"),
+                    "album": t.get("collectionName") or "",
+                    "coverUrl": (t.get("artworkUrl100") or "").replace("100x100", "400x400") if t.get("artworkUrl100") else None,
                 })
 
         return results
@@ -121,7 +140,7 @@ class Crawler:
                         "term": query, "media": "music", "limit": limit, "offset": offset
                     })
                     res.raise_for_status()
-                    return Crawler._prettify_results(res, "itunes")
+                    return Crawler._prettify_results(res.json(), "itunes")
             except Exception as e:
                 logger.error("iTunes search failed: %s", e)
                 return []
@@ -201,12 +220,10 @@ class Crawler:
     ################
     @staticmethod
     async def extract_metadata(url: str) -> Optional[Dict[str, Any]]:
+        """
+        Extract metadata for a given track URL. Handles Spotify, Deezer, iTunes, and falls back to yt-dlp.
+        """
         try:
-            # Guard against missing/invalid url early to avoid passing None to yt-dlp
-            if not url:
-                logger.error("extract_metadata called with empty/None url. Caller should provide a valid URL.")
-                return None
-
             parsed = urlparse(url)
             hostname = parsed.hostname.lower() if parsed.hostname else ""
 
@@ -224,7 +241,7 @@ class Crawler:
                         "artist": ", ".join([a["name"] for a in track["artists"]]),
                         "album": track["album"]["name"],
                         "coverUrl": track["album"]["images"][0]["url"] if track["album"]["images"] else None,
-                        "releaseDate": track["album"]["release_date"],
+                        "releaseDate": track["album"].get("release_date"),
                         "isrc": track.get("external_ids", {}).get("isrc", "")
                     }
 
@@ -243,11 +260,11 @@ class Crawler:
                         "artist": track.artist.name,
                         "album": track.album.title if track.album else "",
                         "coverUrl": track.album.cover if track.album else None,
-                        "releaseDate": track.release_date,
-                        "isrc": track.isrc
+                        "releaseDate": getattr(track, "release_date", None),
+                        "isrc": getattr(track, "isrc", None)
                     }
 
-            # --------- iTunes ---------
+            # --------- iTunes / Apple Music ---------
             elif "itunes.apple.com" in hostname or "music.apple.com" in hostname:
                 path_parts = parsed.path.strip("/").split("/")
                 track_id = path_parts[-1] if path_parts[-1].isdigit() else None
@@ -265,10 +282,11 @@ class Crawler:
                                 "title": r.get("trackName"),
                                 "artist": r.get("artistName"),
                                 "album": r.get("collectionName"),
-                                "coverUrl": r.get("artworkUrl100").replace("100x100", "400x400"),
+                                "coverUrl": r.get("artworkUrl100").replace("100x100", "400x400") if r.get("artworkUrl100") else None,
                                 "releaseDate": r.get("releaseDate"),
                                 "isrc": r.get("trackId")
                             }
+
             # --------- SoundCloud / YouTube Music / Others ---------
             else:
                 # fallback to yt-dlp for unknown URLs
@@ -290,6 +308,10 @@ class Crawler:
 
     @staticmethod
     async def get_links(url: str) -> Dict[str, str]:
+        """
+        Query Song.link API for cross-platform links for the given URL.
+        Returns a map of platform_key -> url (keys lowercased).
+        """
         try:
             api_url = "https://api.song.link/v1-alpha.1/links"
             async with httpx.AsyncClient(timeout=10.0) as client:
@@ -300,7 +322,11 @@ class Crawler:
             links: Dict[str, str] = {}
 
             for key, value in data.get("linksByPlatform", {}).items():
-                links[key] = value.get("url")
+                # value may be dict like {"url": "..."}
+                if isinstance(value, dict):
+                    links[key.lower()] = value.get("url")
+                else:
+                    links[key.lower()] = value
 
             if not links:
                 links["original"] = url
@@ -313,6 +339,67 @@ class Crawler:
 
     @staticmethod
     async def get_download_link(link) -> str:
-        dlink = await Crawler.get_links(link)
-        print(dlink)
-        return str(link)
+        """
+        Resolve a downloadable URL for a given track link using Song.link.
+        Prefer YouTube links (youtube -> youtube_music) when available because
+        yt-dlp can download directly from YouTube. Fall back to other platforms
+        supported by yt-dlp. Uses DOWNLOAD_LINKS_CACHE to avoid repeated lookups.
+        """
+        # Accept either a URL string or an object that contains a "url" key
+        if isinstance(link, dict):
+            url = link.get("url") or link.get("original") or ""
+        else:
+            url = str(link or "")
+
+        if not url:
+            return ""
+
+        # cache key
+        key = hashlib.sha1(url.encode("utf-8")).hexdigest()
+        cached = DOWNLOAD_LINKS_CACHE.get(key)
+        if cached:
+            return cached
+
+        dlink = await Crawler.get_links(url)
+        logger.debug("Song.link result for %s: %s", url, dlink)
+
+        # Normalize keys to prefer youtube
+        # Song.link typically uses keys like 'youtube', 'youtube_music', 'spotify', 'deezer', 'apple_music', 'itunes'
+        preferred_keys = ["youtube", "youtube_music", "ytmusic", "soundcloud", "spotify", "deezer", "apple_music", "itunes", "original"]
+
+        resolved = None
+
+        # 1) direct youtube
+        if dlink.get("youtube"):
+            resolved = dlink.get("youtube")
+
+        # 2) youtube_music -> convert to youtube watch URL when possible
+        elif dlink.get("youtube_music") or dlink.get("ytmusic"):
+            ytm = dlink.get("youtube_music") or dlink.get("ytmusic")
+            if ytm:
+                # Convert music.youtube.com/watch?v=... to www.youtube.com/watch?v=...
+                if "music.youtube.com" in ytm and "watch?v=" in ytm:
+                    resolved = ytm.replace("music.youtube.com/watch?v=", "www.youtube.com/watch?v=")
+                else:
+                    resolved = ytm  # fallback: use as-is
+
+        # 3) other fallbacks
+        if not resolved:
+            for k in preferred_keys:
+                val = dlink.get(k)
+                if val:
+                    resolved = val
+                    break
+
+        # Final fallback: original url
+        if not resolved:
+            resolved = url
+
+        # Cache and return
+        try:
+            DOWNLOAD_LINKS_CACHE[key] = resolved
+        except Exception:
+            # don't break flow on caching issues
+            logger.debug("Failed to store download link in cache for %s", url, exc_info=True)
+
+        return resolved
