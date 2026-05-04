@@ -16,14 +16,13 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup FFmpeg
+      - name: Install ffmpeg (apt)
         uses: FedericoCarboni/setup-ffmpeg@v3
         id: setup-ffmpeg
         with:
           ffmpeg-version: release
-          architecture: ''
-          linking-type: static
-
+          github-token: ${{ github.server_url == 'https://github.com' && github.token || '' }}
+          
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
