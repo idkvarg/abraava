@@ -27,7 +27,7 @@ jobs:
         env:
           # فراخوانی سکرت‌هایی که در تنظیمات گیت‌هاب ذخیره کرده‌اید
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          ARCHIVE_CHANNEL_ID: ${{ secrets.DB_CHANNEL_ID }}
+          DB_CHANNEL_ID: ${{ secrets.DB_CHANNEL_ID }}
         run: |
           # متوقف کردن ربات بعد از 5.5 ساعت برای جلوگیری از تایم‌اوت شدن خود اکشن 
           # تا مرحله بعد (کامیت دیتابیس) با موفقیت اجرا شود.
