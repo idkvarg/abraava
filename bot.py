@@ -7,7 +7,7 @@ from balethon.objects import Message
 
 # دریافت اطلاعات از متغیرهای محیطی که در گیت‌هاب سکرت تنظیم کرده‌اید
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-archive_id_env = os.getenv("ARCHIVE_CHANNEL_ID")
+archive_id_env = os.getenv("DB_CHANNEL_ID")
 ARCHIVE_CHANNEL_ID = int(archive_id_env) if archive_id_env else 0
 
 app = Client(BOT_TOKEN)
