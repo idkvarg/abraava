@@ -45,7 +45,7 @@ async def handle_request(message: Message):
     query = message.text
     await message.reply("در حال جستجو و پردازش...")
 
-    # تنظیمات yt-dlp برای استخراج بهترین کیفیت صوتی
+    # تنظیمات yt-dlp برای استخراج بهترین کیفیت صوتی + خواندن کوکی
     ydl_opts = {
         'format': 'bestaudio/best',
         'noplaylist': True,
@@ -53,7 +53,8 @@ async def handle_request(message: Message):
         'audio_format': 'mp3',
         'outtmpl': '%(id)s.%(ext)s',
         'default_search': 'ytsearch',
-        'quiet': True
+        'quiet': True,
+        'cookiefile': 'cookies.txt'  # <--- این خط اضافه شد
     }
 
     try:
