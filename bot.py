@@ -124,7 +124,8 @@ async def send_track_info(client, context, vid):
             await context.reply(caption, reply_markup=keyboard)
 
 @app.on_callback_query()
-async def handle_callback(client: Client, query: CallbackQuery):
+async def handle_callback(client: Client, callback_query: CallbackQuery):
+    query = callback_query
     data = query.data
     chat_id = query.message.chat.id
     action, *args = data.split("|")
