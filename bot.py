@@ -226,8 +226,9 @@ async def handle_callback(client, callback_query):
         await callback_query.message.edit_text(text_res, reply_markup=InlineKeyboard(nav_buttons) if nav_buttons else None)
 
     # دانلود و ارسال فایل صوتی
-    elif data.startswith("getaudio:"):        
-        track_id = data.split(":")[1]
+    elif data.startswith("getaudio:"):       
+        print(data)
+        track_id = data.split("getaudio:")[1]
         # ویرایش پیام قبلی برای نشان دادن وضعیت
         await callback_query.answer("⏳ در حال پردازش فایل، لطفا صبور باشید...")
         
