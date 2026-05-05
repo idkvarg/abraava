@@ -146,6 +146,12 @@ async def send_track_info(client, context, vid):
             try:
                 with yt_dlp.YoutubeDL(dl_opts) as ydl:
                     info = ydl.extract_info(vid, download=False)
+                    # اگر ytmusic نتوانست اطلاعات را بگیرد، از yt-dlp می‌گیریم
+                    if title == 'Unknown':
+                        title = info.get('title', 'Unknown')
+                        artist = info.get('uploader', info.get('channel', 'Unknown'))
+                        thumb = info.get('thumbnail', thumb)
+
                     for f in info.get('formats', []):
                         if f.get('vcodec') == 'none' and f.get('acodec') != 'none':
                             formats.append({
@@ -156,9 +162,8 @@ async def send_track_info(client, context, vid):
                             })
             except Exception as e:
                 print(f"yt-dlp format extraction error: {e}")
-                # در صورت خطا، یک فرمت پیش‌فرض قرار می‌دهیم تا ربات از کار نیفتد
-                formats = [{'format_id': 'bestaudio', 'ext': 'mp3', 'abr': 128, 'format_note': 'Best'}]
-                
+                formats = [{'format_id': 'bestaudio/best', 'ext': 'mp3', 'abr': 128, 'format_note': 'Best'}]
+
             save_track_meta(vid, title, artist, thumb, formats)
         except Exception as e:
             error_text = f"❌ خطا در دریافت اطلاعات: {e}"
