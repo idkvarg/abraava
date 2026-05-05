@@ -14,7 +14,7 @@ import yt_dlp
 
 # ================= تنظیمات اصلی ربات =================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_TOKEN_HERE")
-DB_CHANNEL_ID = int(os.getenv("DB_CHANNEL_ID", "-1000000000000"))                                # آیدی عددی کانال آرشیو
+DB_CHANNEL_ID = int(os.getenv("DB_CHANNEL_ID", "-1000000000000"))  # آیدی عددی کانال آرشیو
 
 AUDIO_EXTENSIONS = {'mp3', 'm4a', 'wav', 'ogg', 'flac', 'amr', 'wma'}
 TEMP_DIR = Path(os.path.abspath("temp_uploads"))
@@ -22,7 +22,8 @@ TEMP_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = "audio_metadata.db"
 
 bot = Client(BOT_TOKEN)
-BOT_USERNAME = "" # در تابع استارت مقداردهی می‌شود
+BOT_USERNAME = ""  # در تابع استارت مقداردهی می‌شود
+
 
 # ================= مدیریت دیتابیس =================
 class DatabaseManager:
@@ -30,43 +31,25 @@ class DatabaseManager:
         self.db_path = db_path
         self.init_db()
 
-# در کلاس DatabaseManager تغییر در init_db و ساختار جدول:
-
-def init_db(self):
-    with sqlite3.connect(self.db_path) as conn:
-        c = conn.cursor()
-
-        # ساخت یا اصلاح جدول با ستون‌های کامل
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS audio_metadata (
-                uuid TEXT PRIMARY KEY,
-                track_number TEXT,
-                title TEXT,
-                artist TEXT,
-                album TEXT,
-                genre TEXT,
-                comment TEXT,
-                url TEXT,
-                album_artist TEXT,
-                disk_number TEXT,
-                year TEXT,
-                copyright TEXT,
-                publisher TEXT,
-                composer TEXT,
-                conductor TEXT,
-                encoded_by TEXT,
-                mood TEXT,
-                catalog TEXT,
-                user_rating INTEGER,
-                track_gain REAL,
-                album_gain REAL,
-                part_of_compilation TEXT,
-                isrc TEXT,
-                channel_message_id TEXT,
-                uploader_name TEXT
-            )
-        ''')
-        conn.commit()
+    def init_db(self):
+        with sqlite3.connect(self.db_path) as conn:
+            c = conn.cursor()
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS audio_metadata (
+                    uuid TEXT PRIMARY KEY, track_number TEXT, title TEXT,
+                    artist TEXT, album TEXT, genre TEXT, comment TEXT,
+                    url TEXT, album_artist TEXT, disk_number TEXT, year TEXT,
+                    copyright TEXT, publisher TEXT, composer TEXT, conductor TEXT,
+                    encoded_by TEXT, mood TEXT, catalog TEXT, user_rating INTEGER,
+                    track_gain REAL, album_gain REAL, part_of_compilation TEXT,
+                    isrc TEXT, channel_message_id TEXT, uploader_name TEXT
+                )
+            ''')
+            try:
+                c.execute("ALTER TABLE audio_metadata ADD COLUMN uploader_name TEXT")
+            except sqlite3.OperationalError:
+                pass
+            conn.commit()
 
     def run_query(self, query, params=(), fetch=False, fetchone=False):
         with sqlite3.connect(self.db_path, check_same_thread=False) as conn:
@@ -79,7 +62,9 @@ def init_db(self):
                 return [dict(row) for row in c.fetchall()]
             conn.commit()
 
+
 db = DatabaseManager(DB_PATH)
+
 
 # ================= توابع کمکی =================
 def extract_file_metadata(filepath):
@@ -96,24 +81,11 @@ def extract_file_metadata(filepath):
             "title": ["TIT2", "©nam", "title", "\xa9nam"],
             "artist": ["TPE1", "©ART", "artist", "\xa9ART"],
             "album": ["TALB", "©alb", "album", "\xa9alb"],
-            "genre": ["TCON", "genre", "©gen"],
+            "genre": ["TCON", "©gen", "genre"],
             "year": ["TDRC", "TYER", "date", "©day", "\xa9day"],
             "comment": ["COMM::eng", "©cmt", "comment"],
-            "track_number": ["TRCK", "tracknumber", "track"],
-            "album_artist": ["TPE2", "aART", "©ART"],
-            "disk_number": ["TPOS"],
-            "copyright": ["TCOP"],
-            "publisher": ["TPUB"],
-            "composer": ["TCOM"],
-            "conductor": ["TPE3"],
-            "encoded_by": ["TENC"],
-            "mood": ["TMOO"],
-            "catalog": ["TXXX:CATALOGNUMBER"],
-            "isrc": ["TSRC"],
-            "key": ["TKEY"],
-            "bpm": ["TBPM"]
+            "track_number": ["TRCK", "tracknumber", "track"]
         }
-
 
         def try_get(tag_name):
             # جستجو در تگ‌ها از لیست کلیدها
@@ -155,28 +127,26 @@ def extract_file_metadata(filepath):
         print(f"extract_file_metadata error: {e}")
         return {}
 
+
 def get_uploader_name(author):
     if author.username:
         return f"@{author.username}"
     return author.first_name or "کاربر ناشناس"
 
+
 def build_metadata_dict(base_meta, yt_dlp_meta=None):
     result = {k: "" for k in [
-        "uuid", "title", "artist", "album", "genre", "year", "comment",
-        "url", "album_artist", "disk_number", "copyright",
-        "publisher", "composer", "conductor", "encoded_by",
-        "mood", "catalog", "part_of_compilation", "isrc",
-        "key", "bpm", "channel_message_id", "uploader_name"
+        "uuid", "title", "artist", "album", "genre", "year", "comment", "url",
+        "album_artist", "disk_number", "copyright", "publisher", "composer",
+        "conductor", "encoded_by", "mood", "catalog", "part_of_compilation",
+        "isrc", "channel_message_id", "uploader_name"
     ]}
-
     result.update({"user_rating": 0, "track_gain": 0.0, "album_gain": 0.0})
 
     for k, v in base_meta.items():
-        if v:
-            result[k] = str(v).strip()
+        if v: result[k] = str(v).strip()
 
     if yt_dlp_meta:
-        # پر کردن متادیتا از yt_dlp اگر در دسترس بود
         result['title'] = result.get('title') or yt_dlp_meta.get('title', '')
         result['artist'] = result.get('artist') or yt_dlp_meta.get('uploader', '')
         result['genre'] = result.get('genre') or yt_dlp_meta.get('genre', '')
@@ -184,8 +154,10 @@ def build_metadata_dict(base_meta, yt_dlp_meta=None):
 
     return result
 
+
 async def save_to_db(metadata: dict):
     loop = asyncio.get_event_loop()
+
     def _save():
         exists = db.run_query("SELECT 1 FROM audio_metadata WHERE uuid = ?", (metadata["uuid"],), fetchone=True)
         if not exists:
@@ -196,7 +168,9 @@ async def save_to_db(metadata: dict):
         else:
             db.run_query("UPDATE audio_metadata SET channel_message_id = ?, uploader_name = ? WHERE uuid = ?",
                          (metadata.get("channel_message_id"), metadata.get("uploader_name"), metadata["uuid"]))
+
     await loop.run_in_executor(None, _save)
+
 
 def build_metadata_text(metadata: dict):
     """ساخت کپشن زیبا برای موزیک"""
@@ -217,9 +191,10 @@ def build_metadata_text(metadata: dict):
     lines.append("━━━━━━━━━━━━")
     uploader = metadata.get("uploader_name", "سیستم")
     lines.append(f"👤 آرشیو شده توسط: {uploader}")
-    lines.append("🤖 @abraava_bot") # یوزرنیم ربات خودتون رو جایگزین کنید
+    lines.append("🤖 @abraava_bot")  # یوزرنیم ربات خودتون رو جایگزین کنید
 
     return "\n".join(lines)
+
 
 # ================= دانلودر ساندکلاود =================
 def download_soundcloud_track(url):
@@ -234,8 +209,9 @@ def download_soundcloud_track(url):
         filepath = ydl.prepare_filename(info)
         return filepath, info
 
+
 # ================= دانلود جزئی فایل از بله =================
-async def download_partial_file(client, file_id, save_path, chunk_size=1024*2047):
+async def download_partial_file(client, file_id, save_path, chunk_size=1024 * 2047):
     """دانلود 512 کیلوبایت اول فایل برای خواندن سریع متادیتا بدون مصرف حجم"""
     try:
         file_info = await client.get_file(file_id)
@@ -253,6 +229,7 @@ async def download_partial_file(client, file_id, save_path, chunk_size=1024*2047
         print(f"Partial download failed: {e}")
         return False
 
+
 # ================= هندلرهای ربات =================
 
 @bot.on_message(private & command("start"))
@@ -269,6 +246,7 @@ async def start_handler(client, message):
         "📌 *نکته:* من را می‌توانید به گروه‌های خود اضافه کنید تا آهنگ‌های ارسالی را به صورت خودکار شناسایی و آرشیو کنم!"
     )
     await message.reply(welcome_text, keyboard)
+
 
 @bot.on_message(text)
 async def text_handler(client, message):
@@ -307,7 +285,7 @@ async def text_handler(client, message):
             metadata["uploader_name"] = get_uploader_name(message.author)
 
             caption_text = build_metadata_text(metadata)
-            sent_message = await client.send_audio(DB_CHANNEL_ID, filepath, caption=caption_text)
+            sent_message = await client.send_audio(CHANNEL_ID, filepath, caption=caption_text)
             metadata["channel_message_id"] = sent_message.document.id
 
             await save_to_db(metadata)
@@ -331,6 +309,7 @@ async def text_handler(client, message):
             [("💿 جستجو در آلبوم‌ها", f"srch:album:{keyword}")]
         )
         await message.reply(f"🔎 می‌خواهید عبارت **{keyword}** را در کدام بخش جستجو کنم؟", buttons)
+
 
 @bot.on_message(document | audio)
 async def handle_document(client, message):
@@ -371,7 +350,7 @@ async def handle_document(client, message):
         caption_text = build_metadata_text(metadata)
 
         # فوروارد فایل اصلی به کانال (نیاز به آپلود مجدد نیست، آیدی فایل کافیست)
-        sent_message = await client.send_document(DB_CHANNEL_ID, doc.id, caption=caption_text)
+        sent_message = await client.send_document(CHANNEL_ID, doc.id, caption=caption_text)
         metadata["channel_message_id"] = sent_message.document.id
 
         await save_to_db(metadata)
@@ -383,6 +362,7 @@ async def handle_document(client, message):
         if tmp_path.exists():
             tmp_path.unlink()
 
+
 @bot.on_callback_query()
 async def handle_callback(client, callback_query):
     data = callback_query.data
@@ -393,22 +373,32 @@ async def handle_callback(client, callback_query):
 
         def do_search():
             if search_type == "track":
-                return db.run_query("SELECT uuid, title, artist FROM audio_metadata WHERE title LIKE ? OR artist LIKE ? LIMIT 10", (f"%{keyword}%", f"%{keyword}%"), fetch=True)
+                return db.run_query(
+                    "SELECT uuid, title, artist FROM audio_metadata WHERE title LIKE ? OR artist LIKE ? LIMIT 10",
+                    (f"%{keyword}%", f"%{keyword}%"), fetch=True)
             elif search_type == "album":
-                return db.run_query("SELECT DISTINCT album, artist FROM audio_metadata WHERE album LIKE ? AND album != '' LIMIT 10", (f"%{keyword}%",), fetch=True)
+                return db.run_query(
+                    "SELECT DISTINCT album, artist FROM audio_metadata WHERE album LIKE ? AND album != '' LIMIT 10",
+                    (f"%{keyword}%",), fetch=True)
             elif search_type == "artist":
-                return db.run_query("SELECT DISTINCT artist FROM audio_metadata WHERE artist LIKE ? AND artist != '' LIMIT 10", (f"%{keyword}%",), fetch=True)
+                return db.run_query(
+                    "SELECT DISTINCT artist FROM audio_metadata WHERE artist LIKE ? AND artist != '' LIMIT 10",
+                    (f"%{keyword}%",), fetch=True)
 
         results = await loop.run_in_executor(None, do_search)
 
         if not results:
-            return await callback_query.message.edit_text("😔 متأسفانه هیچ نتیجه‌ای پیدا نشد. عبارت دیگری را امتحان کنید.")
+            return await callback_query.message.edit_text(
+                "😔 متأسفانه هیچ نتیجه‌ای پیدا نشد. عبارت دیگری را امتحان کنید.")
 
         buttons = []
         if search_type == "track":
-            buttons = [[(f"🎧 {row.get('title','نامشخص')} - {row.get('artist','نامشخص')[:15]}", f"track:{row['uuid']}")] for row in results]
+            buttons = [
+                [(f"🎧 {row.get('title', 'نامشخص')} - {row.get('artist', 'نامشخص')[:15]}", f"track:{row['uuid']}")] for
+                row in results]
         elif search_type == "album":
-            buttons = [[(f"💿 {row.get('album','')} - {row.get('artist','نامشخص')[:15]}", f"album_tracks:{row['album']}:{row['artist']}")] for row in results]
+            buttons = [[(f"💿 {row.get('album', '')} - {row.get('artist', 'نامشخص')[:15]}",
+                         f"album_tracks:{row['album']}:{row['artist']}")] for row in results]
         elif search_type == "artist":
             buttons = [[(f"🎤 {row['artist']}", f"artist:{row['artist']}")] for row in results]
 
@@ -418,13 +408,16 @@ async def handle_callback(client, callback_query):
     # (کد هندلرهای artist:, artist_albums: و track: به همین سبک می‌توانند بهبود یابند)
     elif data.startswith("track:"):
         uuid = data.split(":", 1)[1]
-        row = await loop.run_in_executor(None, lambda: db.run_query("SELECT * FROM audio_metadata WHERE uuid = ?", (uuid,), fetchone=True))
+        row = await loop.run_in_executor(None,
+                                         lambda: db.run_query("SELECT * FROM audio_metadata WHERE uuid = ?", (uuid,),
+                                                              fetchone=True))
 
         if not row or not row.get("channel_message_id"):
             return await callback_query.message.reply("❌ متأسفانه فایل در دیتابیس یافت نشد.")
 
         caption = build_metadata_text(row)
         await client.send_document(callback_query.message.chat.id, row["channel_message_id"], caption=caption)
+
 
 if __name__ == "__main__":
     bot.run()
