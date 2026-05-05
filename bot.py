@@ -18,7 +18,7 @@ DB_PATH = "cache.db"
 
 # افزایش تایم اوت برای جلوگیری از ارور ReadTimeout هنگام آپلود فایل‌های حجیم
 bot = Client(BOT_TOKEN)
-bot.connection.client.timeout = 60.0 
+
 
 BOT_USERNAME = "" 
 
