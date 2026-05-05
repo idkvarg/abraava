@@ -15,7 +15,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BALE_BOT_TOKEN")
 DB_CHANNEL_ID = int(os.getenv("DB_CHANNEL_ID", "-1000000000000"))
 TEMP_DIR = Path("temp_soundcloud")
 TEMP_DIR.mkdir(exist_ok=True)
-DB_PATH = "soundcloud_tracks.db"
+DB_PATH = "audio_metadata.db"
 
 bot = Client(BOT_TOKEN)
 BOT_USERNAME = ""  # مقدار در start هندلر گرفته می‌شود
