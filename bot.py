@@ -284,7 +284,7 @@ async def handle_callback(client, callback_query):
         try:
             logger.info(f"Uploading file {filepath} to cache channel {CACHE_CHANNEL_ID}")
             with open(filepath, "rb") as f:
-                sent_msg = await client.send_audio(CACHE_CHANNEL_ID, f, caption=caption)
+                sent_msg = await client.send_audio(CACHE_CHANNEL_ID, f,title=row['title'], caption=caption)
             
             msg_id = sent_msg.id
             if msg_id:
