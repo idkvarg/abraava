@@ -149,44 +149,6 @@ async def handle_text(client, message):
         content = content.replace(mention, "").strip()
         if not content: return
 
-    # هندل کردن دستور دانلود از نتایج سرچ
-    if content.startswith("/dl_"):
-        track_id = content.split("_")[1]
-        url = f"https://soundcloud.com/tracks/{track_id}"
-        
-        # در صورت وجود کال‌بک یا ریپلای روی لیست جستجو می‌توان پیام قبلی را پاک کرد
-        # برای سادگی فرض می‌کنیم اینجا کاربر فقط دستور را زده است
-        msg = await message.reply("⏳ در حال دریافت اطلاعات...")
-        loop = asyncio.get_event_loop()
-        try:
-            info = await loop.run_in_executor(None, get_soundcloud_info, url)
-        except Exception as e:
-            return await msg.edit_text(f"خطا: {e}")
-
-        meta = {
-            "uuid": f"sc_{info['id']}",
-            "title": info.get("title", ""),
-            "uploader": info.get("uploader", ""),
-            "genre": info.get("genre", ""),
-            "upload_date": str(info.get("upload_date", ""))[:4],
-            "webpage_url": info.get("webpage_url", url),
-            "thumbnail": info.get("thumbnail", ""),
-            "duration": format_duration(info.get("duration", 0)),
-        }
-        db.run_query(f"INSERT OR REPLACE INTO tracks ({','.join(meta.keys())}) VALUES ({','.join(['?'] * len(meta))})", tuple(meta.values()))
-        
-        caption = build_caption(meta, BOT_USERNAME)
-        keyboard = InlineKeyboard([("⬇️ دریافت فایل صوتی", f"getaudio:{info['id']}:1")])
-        
-        await msg.delete()
-        
-        # نمایش کاور و اطلاعات
-        if meta["thumbnail"]:
-            await client.send_photo(message.chat.id, meta["thumbnail"], caption=caption, reply_markup=keyboard)
-        else:
-            await client.send_message(message.chat.id, caption, reply_markup=keyboard)
-        return
-
     # هندل کردن لینک مستقیم
     if "soundcloud.com" in content:
         url_match = re.search(r"(https?://[^\s]+)", content)
