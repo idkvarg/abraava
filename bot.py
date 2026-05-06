@@ -173,7 +173,7 @@ async def send_track_page(message, session):
     text = f"🎵 **Track Search Results**\nPage {current_page}/{total_pages}\n\n"
     for idx, track in enumerate(items, 1):
         minutes, seconds = divmod(track.duration, 60)
-        text += f"{idx}. **{track.title}**\n   👤 {track.uploader}\n   ⏱️ {minutes}:{seconds:02d}\n\n"
+        text += f"{idx}. **{track.title}**\n   👤 {track.uploader}\n   ⏱️ {minutes}:{int(seconds):02d}\n\n"
 
     # Create inline keyboard with buttons
     keyboard = InlineKeyboard()
