@@ -1,2 +1,3 @@
 balethon
 ytmusicapi
+yt-dlp
