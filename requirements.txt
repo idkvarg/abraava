@@ -1,4 +1,2 @@
 balethon
-mutagen
-aiohttp
-yt_dlp
+ytmusicapi
