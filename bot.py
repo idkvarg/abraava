@@ -3,15 +3,17 @@ import json
 import time
 import asyncio
 import hashlib
+import os
 import aiohttp
 import aiosqlite
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Union
 
+import yt_dlp
+from ytmusicapi import YTMusic
 from bale import Bot, Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, InputFile
 
 # ---------- Configuration ----------
-PROXY = "http://127.0.0.1:8085"
 ITUNES_BASE_URL = "https://itunes.apple.com"
 DB_PATH = Path("cache.db")
 BOT_TOKEN = '1011430416:5JY8CU9nGwYtVz0ahfDEIkJyCkVTUCAhLXQ'
@@ -32,14 +34,30 @@ logger = logging.getLogger("iTunesBot")
 # ---------- Async SQLite Cache ----------
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS cache (
-                id TEXT PRIMARY KEY,
-                type TEXT NOT NULL,
-                data TEXT NOT NULL,
-                last_updated INTEGER NOT NULL
-            )
-        """)
+        # Check if table exists and has the correct structure
+        try:
+            await db.execute("SELECT id, type, data, last_updated FROM cache LIMIT 1")
+            # If structure is valid, we just ensure the table exists
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS cache (
+                    id TEXT PRIMARY KEY,
+                    type TEXT NOT NULL,
+                    data TEXT NOT NULL,
+                    last_updated INTEGER NOT NULL
+                )
+            """)
+        except aiosqlite.OperationalError:
+            # Structure was not true or table didn't exist properly, recreate
+            logger.warning("Database structure mismatch or missing. Recreating 'cache' table...")
+            await db.execute("DROP TABLE IF EXISTS cache")
+            await db.execute("""
+                CREATE TABLE cache (
+                    id TEXT PRIMARY KEY,
+                    type TEXT NOT NULL,
+                    data TEXT NOT NULL,
+                    last_updated INTEGER NOT NULL
+                )
+            """)
         await db.commit()
     logger.info("Database initialized successfully.")
 
@@ -95,10 +113,9 @@ class HttpClient:
 async def fetch_itunes(endpoint: str, params: dict) -> Optional[Dict[str, Any]]:
     session = await HttpClient.get_session()
     url = f"{ITUNES_BASE_URL}/{endpoint}"
-    proxy_url = PROXY if PROXY else None
 
     try:
-        async with session.get(url, params=params, proxy=proxy_url, ssl=False) as resp:
+        async with session.get(url, params=params, ssl=False) as resp:
             if resp.status == 200:
                 text = await resp.text()
                 try:
@@ -117,7 +134,7 @@ async def search_itunes(term: str, entity: Optional[str] = None, limit: int = 50
     """Search iTunes. If entity is None, search all music types."""
     logger.info(f"Searching iTunes: term='{term}', entity='{entity}'")
     params = {"term": term, "media": "music", "limit": limit, "country": "US"}
-    if entity:  # only add entity if specified
+    if entity:
         params["entity"] = entity
     return await fetch_itunes("search", params)
 
@@ -170,7 +187,6 @@ async def get_artist(artist_id: int, status_msg: Message = None) -> Optional[Dic
     data = await lookup_itunes(artist_id)
     if data and data.get("resultCount", 0) > 0:
         await set_cached(cache_id, "artist", data)
-        # Also crawl albums in background (but we wait here to have them ready)
         await crawl_artist_albums(artist_id, status_msg)
         return data
     return None
@@ -239,6 +255,67 @@ async def get_track(track_id: int, status_msg: Message = None) -> Optional[Dict[
     return None
 
 
+# ---------- YouTube Download Logic ----------
+async def download_and_send_track(chat_id: int, track_name: str, artist_name: str, status_msg: Message):
+    try:
+        await status_msg.edit("🔍 *در حال جستجو در YouTube Music...*")
+
+        def yt_search():
+            ytmusic = YTMusic()
+            return ytmusic.search(f"{track_name} {artist_name}", filter="songs")
+
+        results = await asyncio.to_thread(yt_search)
+        if not results:
+            await status_msg.edit("❌ *آهنگ مورد نظر یافت نشد.*")
+            return
+
+        video_id = results[0]['videoId']
+        url = f"https://music.youtube.com/watch?v={video_id}"
+        
+        await status_msg.edit("⬇️ *در حال دانلود فایل (لطفاً صبور باشید)...*")
+
+        # The downloaded file pattern
+        file_path_template = f"download_{video_id}"
+
+        def run_ytdlp():
+            ydl_opts = {
+                'format': 'bestaudio/best',
+                'outtmpl': f'{file_path_template}.%(ext)s',
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }],
+                'cookiefile': 'cookies.txt',  # Requires cookies.txt in the root directory
+                'quiet': True,
+                'noprogress': True
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+
+        await asyncio.to_thread(run_ytdlp)
+        
+        mp3_file = f"{file_path_template}.mp3"
+        if not os.path.exists(mp3_file):
+            raise FileNotFoundError("فایل دانلود شده یافت نشد.")
+
+        await status_msg.edit("⬆️ *در حال ارسال آهنگ...*")
+        
+        with open(mp3_file, 'rb') as audio_file:
+            await bot.send_audio(chat_id, audio=InputFile(audio_file), caption=f"🎵 {track_name}\n🎤 {artist_name}")
+
+        # Cleanup
+        os.remove(mp3_file)
+        await status_msg.delete()
+
+    except Exception as e:
+        logger.error(f"Download error: {e}")
+        try:
+            await status_msg.edit("❌ *خطا در دانلود یا استخراج آهنگ (ممکن است کوکی‌ها منقضی شده باشند).*")
+        except:
+            pass
+
+
 # ---------- Helper functions ----------
 def format_duration(milliseconds: int) -> str:
     if not milliseconds:
@@ -296,7 +373,7 @@ async def on_message(message: Message):
             "• کش شدن هوشمند اطلاعات\n"
             "• پخش پیش‌نمایش صوتی آهنگ‌ها\n"
             "• دریافت کاور اورجینال با کیفیت بالا\n"
-            "• صفحه‌بندی ۱۰ تایی (حداکثر ۵۰ نتیجه)\n"
+            "• دانلود مستقیم آهنگ از یوتیوب موزیک\n"
             "• جستجوی ترکیبی بدون فیلتر"
         )
 
@@ -308,7 +385,6 @@ async def on_message(message: Message):
             return
 
         query = parts[1].strip()
-        # Determine if type prefix is given
         if ":" in query:
             type_, term = query.split(":", 1)
             type_ = type_.lower()
@@ -317,7 +393,6 @@ async def on_message(message: Message):
                     "❌ *نوع جستجو نامعتبر است.*\nیکی از گزینه‌های `artist`, `album`, `track` را انتخاب کنید.")
                 return
         else:
-            # No prefix -> mixed search
             type_ = "all"
             term = query
 
@@ -332,7 +407,6 @@ async def on_message(message: Message):
         results = await get_cached(cache_key)
         if not results:
             if type_ == "all":
-                # search without entity filter
                 results = await search_itunes(term, entity=None, limit=50)
             else:
                 results = await search_itunes(term, entity_map[type_], limit=50)
@@ -363,7 +437,6 @@ async def send_search_page(chat_id: int, search_id: str, page: int, message_to_e
     term = cache_data["term"]
     results_list = cache_data["data"]["results"]
 
-    # Compute pagination
     total_items = len(results_list)
     total_pages = (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
     page = max(1, min(page, total_pages))
@@ -374,7 +447,6 @@ async def send_search_page(chat_id: int, search_id: str, page: int, message_to_e
 
     markup = InlineKeyboardMarkup()
 
-    # Build header text
     if type_ == "all":
         header = f"📋 *نتایج جستجوی ترکیبی برای: {term}*\nتعداد کل: {total_items} مورد"
     else:
@@ -383,22 +455,19 @@ async def send_search_page(chat_id: int, search_id: str, page: int, message_to_e
 
     for i, item in enumerate(page_items, 1):
         if type_ == "all":
-            # Determine type based on wrapperType
             wrapper = item.get("wrapperType")
             if wrapper == "artist":
                 btn_text = f"🎤 {item.get('artistName', 'نامشخص')}"
                 callback = f"artist:{item['artistId']}:1"
             elif wrapper == "collection":
-                # Usually an album
                 btn_text = f"📀 {item.get('collectionName', 'نامشخص')[:45]}"
                 callback = f"album:{item['collectionId']}:1"
             elif wrapper == "track":
                 btn_text = f"🎵 {item.get('trackName', 'نامشخص')[:45]}"
                 callback = f"track:{item['trackId']}"
             else:
-                continue  # skip unknown types
+                continue
         else:
-            # Specific type search: already filtered, but use same display logic
             if type_ == "artist":
                 btn_text = f"🎤 {item.get('artistName', 'نامشخص')}"
                 callback = f"artist:{item['artistId']}:1"
@@ -411,13 +480,11 @@ async def send_search_page(chat_id: int, search_id: str, page: int, message_to_e
 
         markup.add(InlineKeyboardButton(text=btn_text, callback_data=callback), row=i)
 
-    # Pagination row
     if total_pages > 1:
         pagination_row = create_pagination_row(f"page:search:{search_id}", page, total_pages)
         for btn in pagination_row:
             markup.add(btn, row=len(page_items) + 1)
 
-    # “New search” button at the bottom
     markup.add(InlineKeyboardButton(text="🔍 جستجوی جدید", callback_data="new_search"), row=len(page_items) + 2)
 
     text = header
@@ -465,11 +532,22 @@ async def on_callback(callback: CallbackQuery):
         elif data.startswith("track:"):
             track_id = int(parts[1])
             await show_track(chat_id, track_id)
+            
+        elif data.startswith("download:"):
+            track_id = int(parts[1])
+            status_msg = await bot.send_message(chat_id, "⏳ *در حال آماده‌سازی برای دانلود...*")
+            track_data = await get_track(track_id)
+            if track_data and track_data.get("results"):
+                track = track_data["results"][0]
+                t_name = track.get("trackName", "")
+                a_name = track.get("artistName", "")
+                asyncio.create_task(download_and_send_track(chat_id, t_name, a_name, status_msg))
+            else:
+                await status_msg.edit("❌ خطا در دریافت اطلاعات آهنگ.")
 
         elif data.startswith("recrawl:"):
             type_ = parts[1]
             id_ = int(parts[2])
-            # Clear cache and re-show, trying to edit the current message
             if type_ == "artist":
                 await delete_cached(f"artist:{id_}")
                 await delete_cached(f"artist_albums:{id_}")
@@ -501,10 +579,8 @@ async def show_artist(chat_id: int, artist_id: int, page: int = 1, message_to_ed
     if artist.get("artistLinkUrl"):
         text += f"*🔗 لینک آیتونز:* [مشاهده در آیتونز]({artist['artistLinkUrl']})\n"
 
-    # Load albums from cache (should be ready after get_artist)
     albums_cache = await get_cached(f"artist_albums:{artist_id}")
     if not albums_cache or "albums" not in albums_cache:
-        # Fallback crawl just in case
         await crawl_artist_albums(artist_id, status_msg)
         albums_cache = await get_cached(f"artist_albums:{artist_id}")
 
@@ -573,7 +649,6 @@ async def show_album(chat_id: int, album_id: int, page: int = 1, message_to_edit
     if album.get("collectionViewUrl"):
         text += f"*🔗 لینک آیتونز:* [مشاهده در آیتونز]({album['collectionViewUrl']})\n"
 
-    # Tracks
     tracks_cache = await get_cached(f"album_tracks:{album_id}")
     if not tracks_cache or "tracks" not in tracks_cache:
         await crawl_album_tracks(album_id, status_msg)
@@ -621,7 +696,6 @@ async def show_album(chat_id: int, album_id: int, page: int = 1, message_to_edit
 
     await status_msg.delete()
 
-    # Try sending high-res photo
     artwork_url = get_high_res_artwork(album.get("artworkUrl100"))
     if artwork_url and not message_to_edit:
         try:
@@ -630,7 +704,6 @@ async def show_album(chat_id: int, album_id: int, page: int = 1, message_to_edit
         except Exception as e:
             logger.error(f"Could not send album cover photo: {e}")
 
-    # Fallback to text
     if message_to_edit:
         try:
             await message_to_edit.edit(text, components=markup)
@@ -662,10 +735,13 @@ async def show_track(chat_id: int, track_id: int, message_to_edit: Message = Non
         text += f"*🔗 لینک آیتونز:* [مشاهده در آیتونز]({track['trackViewUrl']})\n"
 
     markup = InlineKeyboardMarkup()
-    row = 1
+    
+    # دکمه دانلود (نیاز به YTMusicAPI و YT_dlp)
+    markup.add(InlineKeyboardButton(text="⬇️ دانلود کامل آهنگ", callback_data=f"download:{track_id}"), row=1)
+
+    row = 2
     if track.get('collectionId'):
-        markup.add(InlineKeyboardButton(text="📀 مشاهده آلبوم", callback_data=f"album:{track['collectionId']}:1"),
-                   row=row)
+        markup.add(InlineKeyboardButton(text="📀 مشاهده آلبوم", callback_data=f"album:{track['collectionId']}:1"), row=row)
     if track.get('artistId'):
         markup.add(InlineKeyboardButton(text="🎤 مشاهده هنرمند", callback_data=f"artist:{track['artistId']}:1"), row=row)
 
@@ -674,13 +750,11 @@ async def show_track(chat_id: int, track_id: int, message_to_edit: Message = Non
 
     await status_msg.delete()
 
-    # Try sending image
     artwork_url = get_high_res_artwork(track.get("artworkUrl100"))
     sent_photo = False
     if artwork_url:
         try:
             if message_to_edit:
-                # If we have a message to edit, we cannot send photo; so fallback
                 pass
             else:
                 await bot.send_photo(chat_id, photo=artwork_url, caption=text, components=markup)
@@ -697,7 +771,6 @@ async def show_track(chat_id: int, track_id: int, message_to_edit: Message = Non
         else:
             await bot.send_message(chat_id, text, components=markup)
 
-    # Audio preview
     preview_url = track.get("previewUrl")
     if preview_url:
         try:
