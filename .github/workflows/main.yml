@@ -69,5 +69,6 @@ jobs:
       # ---------- Run the bot ----------
       - name: Run bot
         env:
+          DB_CHANNEL_ID: ${{ secrets.DB_CHANNEL_ID }}
           BALE_BOT_TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
         run: python bot.py
