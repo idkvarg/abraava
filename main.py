@@ -162,24 +162,36 @@ async def search_youtube_track(query: str) -> Optional[str]:
 
 
 # ---------- Download & Caching Logic ----------
-async def send_audio_with_retry(bot: Client, chat_id: int, audio_path: str, file_name: str, caption: str, max_retries=1):
-    """Send audio with retry on gateway timeout (504). Accepts string path."""
+async def send_audio_with_retry(bot: Client, chat_id: int, audio_path: str, file_name: str, caption: str, max_retries=3):
+    """Send audio with retry on gateway timeout or internal errors."""
     last_exception = None
-    audio_path = str(audio_path)
-    audio_path = "./downloads" + audio_path.split("/downloads")[1]
-    audio_path = os.path.normpath(audio_path)
-    logger.info(f"Sending audio: {audio_path}")
+    # Fix: Safely resolve absolute path and prevent splitting errors
+    abs_audio_path = os.path.abspath(str(audio_path))
+    
+    if not os.path.exists(abs_audio_path):
+        logger.error(f"File not found for upload: {abs_audio_path}")
+        raise FileNotFoundError(f"File not found: {abs_audio_path}")
+
+    logger.info(f"Sending audio: {abs_audio_path} to chat {chat_id}")
+    
     for attempt in range(1, max_retries + 1):
         try:
-            return await bot.send_document(6053683389, document=audio_path)
+            # Fix: Passing opened file securely, and use actual chat_id
+            with open(abs_audio_path, 'rb') as audio_file:
+                return await bot.send_document(
+                    chat_id=chat_id, 
+                    document=audio_file, 
+                    caption=caption
+                )
         except Exception as e:
-            if "504" in str(e) or "Gateway Time-out" in str(e):
-                logger.warning(f"send_audio 504, retry {attempt}/{max_retries}")
+            error_str = str(e)
+            if "504" in error_str or "500" in error_str or "Time-out" in error_str:
+                logger.warning(f"send_audio network/server error, retry {attempt}/{max_retries}: {e}")
                 last_exception = e
                 await asyncio.sleep(attempt * 2)
             else:
-                logger.error(f"YTMusic search error: {e}")
-                raise
+                logger.error(f"Upload failed fatally: {e}")
+                raise e
     raise last_exception
 
 
@@ -190,7 +202,7 @@ async def send_cached_or_download(bot: Client, chat_id: int, track_id: int):
     channel_msg_id = await get_audio_cache(track_id)
     if channel_msg_id and DB_CHANNEL_ID:
         try:
-            await bot.forward_message(chat_id, from_chat_id=DB_CHANNEL_ID, message_id=channel_msg_id)
+            await bot.forward_message(chat_id, from_chat_id=int(DB_CHANNEL_ID), message_id=channel_msg_id)
             await status_msg.edit(f"✅ آهنگ با موفقیت از دیتابیس {BOT_NAME} دریافت شد.{FOOTER}")
             return
         except Exception as e:
@@ -222,26 +234,33 @@ async def send_cached_or_download(bot: Client, chat_id: int, track_id: int):
 
     await status_msg.edit(f"⏳ در حال دانلود و آماده‌سازی آهنگ (روش‌های پیشرفته ضد تحریم)...{FOOTER}")
 
+    mp3_path = None
     try:
-        # download_audio now returns a string path (or None)
         mp3_path_str = await asyncio.get_event_loop().run_in_executor(
             None, download_audio, video_url
         )
 
-        if mp3_path_str is None:
+        if not mp3_path_str:
             await status_msg.edit(f"❌ دانلود با شکست مواجه شد — همه ۸ روش ناموفق بودند.{FOOTER}")
             return
 
-        mp3_path = Path(mp3_path_str)  # Convert to Path for file operations
+        mp3_path = Path(mp3_path_str)
+        if not mp3_path.exists():
+             await status_msg.edit(f"❌ خطای داخلی: فایل دانلود شده یافت نشد.{FOOTER}")
+             return
+             
         file_size_mb = mp3_path.stat().st_size / (1024 * 1024)
 
         # Download cover image
         cover_bytes = None
         if cover_url:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(cover_url) as resp:
-                    if resp.status == 200:
-                        cover_bytes = await resp.read()
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(cover_url) as resp:
+                        if resp.status == 200:
+                            cover_bytes = await resp.read()
+            except Exception as e:
+                logger.error(f"Failed to download cover: {e}")
 
         # Update metadata using mutagen
         await asyncio.get_event_loop().run_in_executor(
@@ -255,13 +274,15 @@ async def send_cached_or_download(bot: Client, chat_id: int, track_id: int):
             try:
                 await status_msg.edit(f"☁️ در حال آپلود در سرورهای ابری {BOT_NAME}...{FOOTER}")
                 db_msg = await send_audio_with_retry(
-                    bot, int(DB_CHANNEL_ID), mp3_path_str, f"{t_name}.mp3", caption
+                    bot, int(DB_CHANNEL_ID), str(mp3_path), f"{t_name}.mp3", caption
                 )
 
                 if db_msg and db_msg.message_id:
                     await set_audio_cache(track_id, int(db_msg.message_id))
-                    await bot.forward_message(chat_id, from_chat_id=DB_CHANNEL_ID, message_id=db_msg.message_id)
+                    await bot.forward_message(chat_id, from_chat_id=int(DB_CHANNEL_ID), message_id=db_msg.message_id)
                     await status_msg.edit(f"✅ دانلود و پردازش با موفقیت انجام شد.{FOOTER}")
+                else:
+                    raise Exception("No message ID returned from DB Channel")
             except Exception as e:
                 logger.error(f"Error caching to DB_CHANNEL: {e}")
                 await send_audio_with_retry(bot, chat_id, str(mp3_path), f"{t_name}.mp3", caption)
@@ -270,12 +291,16 @@ async def send_cached_or_download(bot: Client, chat_id: int, track_id: int):
             await send_audio_with_retry(bot, chat_id, str(mp3_path), f"{t_name}.mp3", caption)
             await status_msg.edit(f"✅ دانلود و ارسال با موفقیت انجام شد.{FOOTER}")
 
-        # Clean up temp file
-        mp3_path.unlink(missing_ok=True)
-
     except Exception as e:
         logger.exception("Download error")
         await status_msg.edit(f"❌ خطا در عملیات: {e}{FOOTER}")
+    finally:
+        # Fix: Safely clean up temp file using try-except
+        if mp3_path and mp3_path.exists():
+            try:
+                mp3_path.unlink()
+            except Exception as e:
+                logger.error(f"Failed to delete temp file {mp3_path}: {e}")
 
 
 async def send_voice_preview(chat_id: int, track_id: int):
@@ -294,6 +319,7 @@ async def send_voice_preview(chat_id: int, track_id: int):
     try:
         await bot.send_voice(chat_id, voice=preview_url,
                              caption=f"🎧 پیش‌نمایش صوتی آهنگ {track.get('trackName')}{FOOTER}")
+        await status_msg.delete()
     except Exception as e:
         logger.error(f"Failed to send audio preview: {e}")
         await status_msg.edit(f"❌ خطا در ارسال پیش‌نمایش.{FOOTER}")
@@ -331,31 +357,16 @@ def generate_search_hash(type_: str, term: str) -> str:
 async def edit_or_send(bot: Client, chat_id: int, message_to_edit: Optional[Message], text: str,
                        markup, artwork_url: str = None):
     """Safely edit or send a message (caption or text) with optional photo."""
-    if False:  # Editing disabled for simplicity; always send new message
-        try:
-            if message_to_edit and message_to_edit.photo:
-                if artwork_url:
-                    await bot.edit_message_caption(
-                        chat_id=chat_id,
-                        message_id=message_to_edit.message_id,
-                        caption=text,
-                        reply_markup=markup
-                    )
-                else:
-                    await message_to_edit.delete()
-                    await bot.send_message(chat_id, text, markup)
-            elif message_to_edit:
-                await message_to_edit.edit(text, markup)
-            else:
-                raise Exception("No message to edit")
-            return
-        except Exception as e:
-            logger.warning(f"Edit failed: {e}, sending new message")
-
     if artwork_url:
         await bot.send_photo(chat_id, photo=artwork_url, caption=text, reply_markup=markup)
     else:
-        await bot.send_message(chat_id, text, markup)
+        await bot.send_message(chat_id, text, reply_markup=markup)
+    
+    if message_to_edit:
+        try:
+            await message_to_edit.delete()
+        except:
+            pass
 
 
 # ---------- Bale Bot Initialization & Handlers ----------
@@ -539,7 +550,7 @@ async def send_search_page(chat_id: int, search_id: str, page: int, message_to_e
                    InlineKeyboardButton("🔍 هنرمندان", f"refine:artist:{refine_term}"),
                    InlineKeyboardButton("🔍 آهنگ‌ها", f"refine:track:{refine_term}")])
 
-    markup.append([InlineKeyboardButton(text="❌", callback_data="close")])
+    markup.append([InlineKeyboardButton(text="❌ بستن", callback_data="close")])
 
     text = header + FOOTER
     await edit_or_send(bot, chat_id, message_to_edit, text, markup=InlineKeyboard(*markup))
@@ -553,7 +564,10 @@ async def on_callback(callback_query: CallbackQuery):
     if data == "ignore":
         return
     if data == "close":
-        await bot.delete_message(chat_id=callback_query.message.chat.id, message_id=callback_query.message.id)
+        try:
+            await callback_query.message.delete()
+        except:
+            pass
         return
     try:
         parts = data.split(":")
@@ -688,7 +702,7 @@ async def show_artist(chat_id: int, artist_id: int, page: int = 1, message_to_ed
             markup.append(pagination_row)
 
     markup.append([InlineKeyboardButton(text="🔄 تازه‌سازی اطلاعات", callback_data=f"recrawl:artist:{artist_id}")])
-    markup.append([InlineKeyboardButton(text="❌", callback_data="close")])
+    markup.append([InlineKeyboardButton(text="❌ بستن", callback_data="close")])
 
     text += FOOTER
     await status_msg.delete()
@@ -752,7 +766,7 @@ async def show_album(chat_id: int, album_id: int, page: int = 1, message_to_edit
         markup.append([InlineKeyboardButton(text="🎤 مشاهده هنرمند",
                                             callback_data=f"artist:{album['artistId']}:1")])
     markup.append([InlineKeyboardButton(text="🔄 تازه‌سازی اطلاعات", callback_data=f"recrawl:album:{album_id}")])
-    markup.append([InlineKeyboardButton(text="❌", callback_data="close")])
+    markup.append([InlineKeyboardButton(text="❌ بستن", callback_data="close")])
 
     text += FOOTER
     await status_msg.delete()
@@ -791,7 +805,7 @@ async def show_track(chat_id: int, track_id: int, message_to_edit: Optional[Mess
         links.append(InlineKeyboardButton(text="🎤 مشاهده هنرمند", callback_data=f"artist:{track['artistId']}:1"))
     markup.append(links)
     markup.append([InlineKeyboardButton(text="🔄 تازه‌سازی", callback_data=f"recrawl:track:{track_id}")])
-    markup.append([InlineKeyboardButton(text="❌", callback_data="close")])
+    markup.append([InlineKeyboardButton(text="❌ بستن", callback_data="close")])
 
     text += FOOTER
     await status_msg.delete()
