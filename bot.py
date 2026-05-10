@@ -25,8 +25,8 @@ from mutagen.id3 import ID3, TIT2, TPE1, TALB, APIC, error
 from youtube_downloader import download_audio
 
 # ---------- Configuration ----------
-#PROXY_URL = "http://127.0.0.1:8085"        # change if needed
-#VERIFY_SSL = False
+# PROXY_URL = "http://127.0.0.1:8085"        # change if needed
+# VERIFY_SSL = False
 
 ITUNES_BASE_URL = "https://itunes.apple.com"
 DB_PATH = Path("cache.db")
@@ -52,6 +52,7 @@ logger = logging.getLogger("AbraavaBot")
 OFFLINE_MODE = os.environ.get("OFFLINE_MODE", "false").lower() in ("true", "1", "yes")
 if OFFLINE_MODE:
     logger.warning("🔴 Bot running in OFFLINE MODE – no external API calls will be made.")
+
 
 # ---------- Async SQLite Database (relational) ----------
 async def init_db():
@@ -115,6 +116,7 @@ async def init_db():
         await db.commit()
     logger.info("Database initialized successfully (relational tables ready).")
 
+
 # ---------- Relational DB store/retrieve helpers ----------
 async def store_artist(item: dict):
     """Insert or replace an artist from iTunes API item into the artist table."""
@@ -131,6 +133,7 @@ async def store_artist(item: dict):
             json.dumps(item)
         ))
         await db.commit()
+
 
 async def store_album(item: dict):
     """Insert or replace an album from iTunes API item into the album table."""
@@ -150,6 +153,7 @@ async def store_album(item: dict):
             json.dumps(item)
         ))
         await db.commit()
+
 
 async def store_track(item: dict):
     """Insert or replace a track from iTunes API item into the track table."""
@@ -173,6 +177,7 @@ async def store_track(item: dict):
         ))
         await db.commit()
 
+
 async def get_artist_db(artist_id: int) -> Optional[Dict[str, Any]]:
     """Fetch artist from local DB and return in iTunes lookup format."""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -182,6 +187,7 @@ async def get_artist_db(artist_id: int) -> Optional[Dict[str, Any]]:
                 artist_data = json.loads(row[0])
                 return {"resultCount": 1, "results": [artist_data]}
     return None
+
 
 async def get_album_db(collection_id: int) -> Optional[Dict[str, Any]]:
     """Fetch album from local DB and return in iTunes lookup format."""
@@ -193,6 +199,7 @@ async def get_album_db(collection_id: int) -> Optional[Dict[str, Any]]:
                 return {"resultCount": 1, "results": [album_data]}
     return None
 
+
 async def get_track_db(track_id: int) -> Optional[Dict[str, Any]]:
     """Fetch track from local DB and return in iTunes lookup format."""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -203,6 +210,7 @@ async def get_track_db(track_id: int) -> Optional[Dict[str, Any]]:
                 return {"resultCount": 1, "results": [track_data]}
     return None
 
+
 # ---------- Old cache helpers (kept for search result sets) ----------
 async def get_cached(id: str) -> Optional[Dict[str, Any]]:
     async with aiosqlite.connect(DB_PATH) as db:
@@ -212,6 +220,7 @@ async def get_cached(id: str) -> Optional[Dict[str, Any]]:
                 return json.loads(row[0])
     return None
 
+
 async def set_cached(id: str, type: str, data: Dict[str, Any]):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
@@ -220,15 +229,18 @@ async def set_cached(id: str, type: str, data: Dict[str, Any]):
         """, (id, type, json.dumps(data), int(time.time())))
         await db.commit()
 
+
 async def delete_cached(id: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("DELETE FROM cache WHERE id = ?", (id,))
         await db.commit()
 
+
 async def is_cached(id: str) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT 1 FROM cache WHERE id = ?", (id,)) as cursor:
             return await cursor.fetchone() is not None
+
 
 async def get_audio_cache(track_id: int) -> Optional[int]:
     async with aiosqlite.connect(DB_PATH) as db:
@@ -236,11 +248,13 @@ async def get_audio_cache(track_id: int) -> Optional[int]:
             row = await cursor.fetchone()
             return row[0] if row else None
 
+
 async def set_audio_cache(track_id: int, channel_message_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("INSERT OR REPLACE INTO audio_cache (track_id, channel_message_id) VALUES (?, ?)",
                          (track_id, channel_message_id))
         await db.commit()
+
 
 # ---------- Shared HTTP Session ----------
 class HttpClient:
@@ -257,6 +271,7 @@ class HttpClient:
     async def close(cls):
         if cls.session and not cls.session.closed:
             await cls.session.close()
+
 
 # ---------- iTunes API Client ----------
 async def fetch_itunes(endpoint: str, params: dict) -> Optional[Dict[str, Any]]:
@@ -281,6 +296,7 @@ async def fetch_itunes(endpoint: str, params: dict) -> Optional[Dict[str, Any]]:
         logger.error(f"Error fetching from iTunes API ({endpoint}): {e}")
     return None
 
+
 async def search_itunes(term: str, entity: Optional[str] = None, limit: int = 50) -> Optional[Dict[str, Any]]:
     logger.info(f"Searching iTunes: term='{term}', entity='{entity}'")
     params = {"term": term, "media": "music", "limit": limit, "country": "US"}
@@ -288,12 +304,14 @@ async def search_itunes(term: str, entity: Optional[str] = None, limit: int = 50
         params["entity"] = entity
     return await fetch_itunes("search", params)
 
+
 async def lookup_itunes(id: int, entity: Optional[str] = None) -> Optional[Dict[str, Any]]:
     logger.info(f"Looking up iTunes: id={id}, entity={entity}")
     params = {"id": id, "country": "US"}
     if entity:
         params["entity"] = entity
     return await fetch_itunes("lookup", params)
+
 
 # ---------- Local search (offline/fallback) ----------
 async def local_search(term: str, entity: str = "all") -> Optional[Dict[str, Any]]:
@@ -353,6 +371,7 @@ async def local_search(term: str, entity: str = "all") -> Optional[Dict[str, Any
         results = results[:50]
     return {"resultCount": len(results), "results": results}
 
+
 # ---------- Crawlers (modified to use relational DB) ----------
 async def crawl_artist_albums(artist_id: int, status_msg: Message = None):
     if OFFLINE_MODE:
@@ -378,6 +397,7 @@ async def crawl_artist_albums(artist_id: int, status_msg: Message = None):
                 await crawl_album_tracks(album_id, status_msg)
         await set_cached(cache_id, "artist_albums", {"albums": albums})
 
+
 async def get_artist(artist_id: int, status_msg: Message = None) -> Optional[Dict[str, Any]]:
     # Try local DB first
     db_data = await get_artist_db(artist_id)
@@ -401,6 +421,7 @@ async def get_artist(artist_id: int, status_msg: Message = None) -> Optional[Dic
         return data
     return None
 
+
 async def crawl_album_tracks(album_id: int, status_msg: Message = None):
     if OFFLINE_MODE:
         return
@@ -422,6 +443,7 @@ async def crawl_album_tracks(album_id: int, status_msg: Message = None):
                 # Store track in relational DB
                 await store_track(item)
         await set_cached(cache_id, "album_tracks", {"tracks": tracks})
+
 
 async def get_album(album_id: int, status_msg: Message = None) -> Optional[Dict[str, Any]]:
     db_data = await get_album_db(album_id)
@@ -445,6 +467,7 @@ async def get_album(album_id: int, status_msg: Message = None) -> Optional[Dict[
         return data
     return None
 
+
 async def get_track(track_id: int, status_msg: Message = None) -> Optional[Dict[str, Any]]:
     db_data = await get_track_db(track_id)
     if db_data:
@@ -465,6 +488,7 @@ async def get_track(track_id: int, status_msg: Message = None) -> Optional[Dict[
         return data
     return None
 
+
 # ---------- YouTube Music Helper ----------
 async def search_youtube_track(query: str) -> Optional[str]:
     """Search YouTube Music and return best video ID."""
@@ -481,6 +505,7 @@ async def search_youtube_track(query: str) -> Optional[str]:
     except Exception as e:
         logger.error(f"YTMusic search error: {e}")
     return None
+
 
 # ---------- Metadata Tagger ----------
 def tag_mp3(file_path: Path, title: str, artist: str, album: str, cover_bytes: bytes):
@@ -508,13 +533,16 @@ def tag_mp3(file_path: Path, title: str, artist: str, album: str, cover_bytes: b
     except Exception as e:
         logger.error(f"Failed to tag MP3 {file_path}: {e}")
 
+
 # ---------- Download & Caching Logic ----------
-async def send_audio_with_retry(bot: Bot, chat_id: int, audio_path: str, file_name: str, caption: str, max_retries=1):
+async def send_audio_with_retry(bot: Bot, chat_id: int, audio_path, file_name: str, caption: str, max_retries=1):
     """Send audio with retry on gateway timeout (504)."""
     last_exception = None
     for attempt in range(1, max_retries + 1):
         try:
-            audio_file = InputFile(audio_path, file_name=file_name)
+            logger.warning(file_name)
+            logger.warning(audio_path)
+            audio_file = InputFile('./' + file_name, file_name=file_name)
             return await bot.send_audio(chat_id, audio=audio_file, caption=caption)
         except APIError as e:
             if "504" in str(e) or "Gateway Time-out" in str(e):
@@ -527,6 +555,7 @@ async def send_audio_with_retry(bot: Bot, chat_id: int, audio_path: str, file_na
             last_exception = e
             break
     raise last_exception
+
 
 async def send_cached_or_download(bot: Bot, chat_id: int, track_id: int):
     status_msg = await bot.send_message(chat_id, f"⏳ *در حال آماده‌سازی دانلود از {BOT_NAME}...*{FOOTER}")
@@ -624,6 +653,7 @@ async def send_cached_or_download(bot: Bot, chat_id: int, track_id: int):
         logger.exception("Download error")
         await status_msg.edit(f"❌ خطا در عملیات: {e}{FOOTER}")
 
+
 async def send_voice_preview(chat_id: int, track_id: int):
     status_msg = await bot.send_message(chat_id, f"⏳ در حال دریافت پیش‌نمایش...{FOOTER}")
     track_data = await get_track(track_id)
@@ -643,13 +673,15 @@ async def send_voice_preview(chat_id: int, track_id: int):
                 if resp.status == 200:
                     audio_bytes = await resp.read()
                     voice_input = InputFile(audio_bytes, file_name="preview.m4a")
-                    await bot.send_audio(chat_id, audio=voice_input, caption=f"🎧 پیش‌نمایش صوتی آهنگ {track.get('trackName')}{FOOTER}")
+                    await bot.send_audio(chat_id, audio=voice_input,
+                                         caption=f"🎧 پیش‌نمایش صوتی آهنگ {track.get('trackName')}{FOOTER}")
                     await status_msg.delete()
                 else:
                     await status_msg.edit(f"❌ خطا در ارتباط با سرور آیتیونز.{FOOTER}")
     except Exception as e:
         logger.error(f"Failed to send audio preview: {e}")
         await status_msg.edit(f"❌ خطا در ارسال پیش‌نمایش.{FOOTER}")
+
 
 # ---------- Helper functions ----------
 def format_duration(milliseconds: int) -> str:
@@ -659,10 +691,12 @@ def format_duration(milliseconds: int) -> str:
     seconds = (milliseconds % 60000) // 1000
     return f"{minutes}:{seconds:02d}"
 
+
 def get_high_res_artwork(url: str, size: int = 600) -> str:
     if not url:
         return ""
     return url.replace("100x100bb", f"{size}x{size}bb")
+
 
 def create_pagination_row(callback_prefix: str, current_page: int, total_pages: int) -> List[InlineKeyboardButton]:
     row = []
@@ -673,10 +707,13 @@ def create_pagination_row(callback_prefix: str, current_page: int, total_pages: 
         row.append(InlineKeyboardButton(text="بعدی ▶️", callback_data=f"{callback_prefix}:{current_page + 1}"))
     return row
 
+
 def generate_search_hash(type_: str, term: str) -> str:
     return hashlib.md5(f"{type_}:{term}".encode()).hexdigest()[:10]
 
-async def edit_or_send(bot: Bot, chat_id: int, message_to_edit: Optional[Message], text: str, markup: InlineKeyboardMarkup, photo_bytes: Optional[bytes] = None):
+
+async def edit_or_send(bot: Bot, chat_id: int, message_to_edit: Optional[Message], text: str,
+                       markup: InlineKeyboardMarkup, photo_bytes: Optional[bytes] = None):
     """
     Safely edit a message (caption or text) or send a new one if editing fails.
     If photo_bytes is given, send as photo; otherwise send as text.
@@ -706,18 +743,22 @@ async def edit_or_send(bot: Bot, chat_id: int, message_to_edit: Optional[Message
 
     # Send new
     if photo_bytes:
-        await bot.send_photo(chat_id, photo=InputFile(photo_bytes, file_name="cover.jpg"), caption=text, components=markup)
+        await bot.send_photo(chat_id, photo=InputFile(photo_bytes, file_name="cover.jpg"), caption=text,
+                             components=markup)
     else:
         await bot.send_message(chat_id, text, components=markup)
 
+
 # ---------- Bale Bot Initialization & Handlers ----------
 bot = Bot(token=BOT_TOKEN)
+
 
 @bot.event
 async def on_ready():
     logger.info(f"{bot.user.username} (Abraava) is ready and connected to Bale!")
     await bot.delete_webhook()
     await init_db()
+
 
 @bot.event
 async def on_message(message: Message):
@@ -776,14 +817,16 @@ async def on_message(message: Message):
     elif msg_text.startswith("/search"):
         parts = msg_text.split(" ", 1)
         if len(parts) < 2:
-            await message.reply(f"❌ *لطفاً عبارت جستجو را وارد کنید.*\nمثال: `/search artist:Taylor Swift` یا `/search hello`{FOOTER}")
+            await message.reply(
+                f"❌ *لطفاً عبارت جستجو را وارد کنید.*\nمثال: `/search artist:Taylor Swift` یا `/search hello`{FOOTER}")
             return
         query = parts[1].strip()
         if ":" in query:
             type_, term = query.split(":", 1)
             type_ = type_.lower()
             if type_ not in ["artist", "album", "track"]:
-                await message.reply(f"❌ *نوع جستجو نامعتبر است.*\nیکی از گزینه‌های `artist`, `album`, `track` را انتخاب کنید.{FOOTER}")
+                await message.reply(
+                    f"❌ *نوع جستجو نامعتبر است.*\nیکی از گزینه‌های `artist`, `album`, `track` را انتخاب کنید.{FOOTER}")
                 return
         else:
             type_ = "all"
@@ -827,7 +870,9 @@ async def on_message(message: Message):
         await status_msg.delete()
         await send_search_page(message.chat.id, search_id, 1, message_to_edit=None, original_term=term)
 
-async def send_search_page(chat_id: int, search_id: str, page: int, message_to_edit: Optional[Message] = None, original_term: Optional[str] = None):
+
+async def send_search_page(chat_id: int, search_id: str, page: int, message_to_edit: Optional[Message] = None,
+                           original_term: Optional[str] = None):
     cache_key = f"search:{search_id}"
     cache_data = await get_cached(cache_key)
     if not cache_data:
@@ -894,9 +939,12 @@ async def send_search_page(chat_id: int, search_id: str, page: int, message_to_e
     # Refinement buttons (always show, using cached term)
     refine_term = term  # use the term from cache
     if refine_term:
-        markup.add(InlineKeyboardButton(text="🔍 جستجو در آلبوم‌ها", callback_data=f"refine:album:{refine_term}"), row=current_row)
-        markup.add(InlineKeyboardButton(text="🔍 جستجو در هنرمندان", callback_data=f"refine:artist:{refine_term}"), row=current_row+1)
-        markup.add(InlineKeyboardButton(text="🔍 جستجو در آهنگ‌ها", callback_data=f"refine:track:{refine_term}"), row=current_row+2)
+        markup.add(InlineKeyboardButton(text="🔍 جستجو در آلبوم‌ها", callback_data=f"refine:album:{refine_term}"),
+                   row=current_row)
+        markup.add(InlineKeyboardButton(text="🔍 جستجو در هنرمندان", callback_data=f"refine:artist:{refine_term}"),
+                   row=current_row + 1)
+        markup.add(InlineKeyboardButton(text="🔍 جستجو در آهنگ‌ها", callback_data=f"refine:track:{refine_term}"),
+                   row=current_row + 2)
         new_search_row = current_row + 3
     else:
         new_search_row = current_row
@@ -905,6 +953,7 @@ async def send_search_page(chat_id: int, search_id: str, page: int, message_to_e
 
     text = header + FOOTER
     await edit_or_send(bot, chat_id, message_to_edit, text, markup)
+
 
 @bot.event
 async def on_callback(callback: CallbackQuery):
@@ -1010,6 +1059,7 @@ async def on_callback(callback: CallbackQuery):
     except Exception as e:
         logger.error(f"Error handling callback {data}: {e}")
 
+
 # ---------- Show functions (improved for photo caption editing) ----------
 async def show_artist(chat_id: int, artist_id: int, page: int = 1, message_to_edit: Optional[Message] = None):
     status_msg = await bot.send_message(chat_id, f"🔄 *در حال پردازش هنرمند...*{FOOTER}")
@@ -1076,6 +1126,7 @@ async def show_artist(chat_id: int, artist_id: int, page: int = 1, message_to_ed
                     photo_bytes = await resp.read()
 
     await edit_or_send(bot, chat_id, message_to_edit, text, markup, photo_bytes)
+
 
 async def show_album(chat_id: int, album_id: int, page: int = 1, message_to_edit: Optional[Message] = None):
     status_msg = await bot.send_message(chat_id, f"🔄 *در حال پردازش آلبوم...*{FOOTER}")
@@ -1152,6 +1203,7 @@ async def show_album(chat_id: int, album_id: int, page: int = 1, message_to_edit
 
     await edit_or_send(bot, chat_id, message_to_edit, text, markup, photo_bytes)
 
+
 async def show_track(chat_id: int, track_id: int, message_to_edit: Optional[Message] = None):
     status_msg = await bot.send_message(chat_id, f"🔄 *در حال بارگذاری اطلاعات آهنگ...*{FOOTER}")
     data = await get_track(track_id, status_msg)
@@ -1179,7 +1231,8 @@ async def show_track(chat_id: int, track_id: int, message_to_edit: Optional[Mess
         row += 1
 
     if track.get('collectionId'):
-        markup.add(InlineKeyboardButton(text="📀 مشاهده آلبوم", callback_data=f"album:{track['collectionId']}:1"), row=row)
+        markup.add(InlineKeyboardButton(text="📀 مشاهده آلبوم", callback_data=f"album:{track['collectionId']}:1"),
+                   row=row)
     if track.get('artistId'):
         markup.add(InlineKeyboardButton(text="🎤 مشاهده هنرمند", callback_data=f"artist:{track['artistId']}:1"), row=row)
 
@@ -1198,6 +1251,7 @@ async def show_track(chat_id: int, track_id: int, message_to_edit: Optional[Mess
                     photo_bytes = await resp.read()
 
     await edit_or_send(bot, chat_id, message_to_edit, text, markup, photo_bytes)
+
 
 if __name__ == "__main__":
     logger.info(f"🎵 {BOT_NAME} Music Bot Starting (with relational DB & offline search)...")
