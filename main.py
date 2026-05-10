@@ -192,7 +192,7 @@ async def send_audio_with_retry(bot: Client, chat_id: int, audio_path, file_name
     last_exception = None
     for attempt in range(1, max_retries + 1):
         try:
-            file_path = str(audio_path)
+            file_path = audio_path.name
             logger.info(file_path)
             return await bot.send_audio(6053683389, audio=file_path, caption=caption)
         except Exception as e:
