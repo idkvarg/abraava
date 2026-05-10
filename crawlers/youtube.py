@@ -79,7 +79,7 @@ def _build_opts(method: int, output_dir: str) -> dict:
     proxy = _check_proxy()
 
     # ── Method‑specific extractor args & proxy ────────────────────────
-    if method == 1:
+    if method == 8:
         # web client + deno + remote EJS (GitHub) + proxy
         if proxy:
             opts["proxy"] = proxy
@@ -139,7 +139,7 @@ def _build_opts(method: int, output_dir: str) -> dict:
         # mweb client **no proxy**
         opts["extractor_args"] = {"youtube": {"player_client": ["mweb"]}}
 
-    elif method == 8:
+    elif method == 1:
         # android client (last resort, may give lower quality)
         if proxy:
             opts["proxy"] = proxy
