@@ -165,7 +165,8 @@ async def search_youtube_track(query: str) -> Optional[str]:
 async def send_audio_with_retry(bot: Client, chat_id: int, audio_path: str, file_name: str, caption: str, max_retries=1):
     """Send audio with retry on gateway timeout (504). Accepts string path."""
     last_exception = None
-    path_obj = Path(audio_path)  # Convert to Path for name extraction
+    audio_path = audio_path.name
+    logger.error(f"YTMusic search error: {e}")
     for attempt in range(1, max_retries + 1):
         try:
             logger.info(f"Sending audio: {audio_path}")
