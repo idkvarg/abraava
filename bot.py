@@ -1,6 +1,6 @@
 """
 bale_music_bot.py
-iTunes Music Bot with advanced 8‑method YouTube Music downloader.
+Abraava Music Bot with advanced 8‑method YouTube Music downloader, metadata tagging, and caching.
 """
 
 import logging
@@ -18,6 +18,7 @@ from typing import Optional, Dict, Any, List, Union
 import yt_dlp
 from ytmusicapi import YTMusic
 from bale import Bot, Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, InputFile
+from mutagen.id3 import ID3, TIT2, TPE1, TALB, APIC, error
 
 # Import the 8‑method downloader
 from youtube_downloader import download_audio
@@ -26,9 +27,13 @@ from youtube_downloader import download_audio
 ITUNES_BASE_URL = "https://itunes.apple.com"
 DB_PATH = Path("cache.db")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "1011430416:5JY8CU9nGwYtVz0ahfDEIkJyCkVTUCAhLXQ")
-CACHE_CHANNEL_ID = os.environ.get("CACHE_CHANNEL_ID", None)  # set to your channel ID
+DB_CHANNEL_ID = os.environ.get("DB_CHANNEL_ID", None)  # Github Secret: DB_CHANNEL_ID
 ITEMS_PER_PAGE = 10
 YT = None  # YTMusic instance initialized later
+
+# ---------- Bot Information ----------
+BOT_NAME = "ابرآوا"
+FOOTER = "\n\n@abraava_bot\n@abraava"
 
 # ---------- Advanced Logging ----------
 logging.basicConfig(
@@ -39,9 +44,9 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
-logger = logging.getLogger("iTunesBot")
+logger = logging.getLogger("AbraavaBot")
 
-# ---------- Async SQLite Cache (unchanged) ----------
+# ---------- Async SQLite Cache ----------
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
@@ -115,7 +120,7 @@ class HttpClient:
         if cls.session and not cls.session.closed:
             await cls.session.close()
 
-# ---------- iTunes API Client (unchanged) ----------
+# ---------- iTunes API Client ----------
 async def fetch_itunes(endpoint: str, params: dict) -> Optional[Dict[str, Any]]:
     session = await HttpClient.get_session()
     url = f"{ITUNES_BASE_URL}/{endpoint}"
@@ -148,14 +153,14 @@ async def lookup_itunes(id: int, entity: Optional[str] = None) -> Optional[Dict[
         params["entity"] = entity
     return await fetch_itunes("lookup", params)
 
-# ---------- Crawlers (unchanged) ----------
+# ---------- Crawlers ----------
 async def crawl_artist_albums(artist_id: int, status_msg: Message = None):
     cache_id = f"artist_albums:{artist_id}"
     if await is_cached(cache_id):
         return
     if status_msg:
         try:
-            await status_msg.edit("⏳ *در حال دریافت آلبوم‌های هنرمند...*")
+            await status_msg.edit(f"⏳ *در حال دریافت آلبوم‌های هنرمند...*{FOOTER}")
         except:
             pass
     data = await lookup_itunes(artist_id, "album")
@@ -177,7 +182,7 @@ async def get_artist(artist_id: int, status_msg: Message = None) -> Optional[Dic
         return cached
     if status_msg:
         try:
-            await status_msg.edit("⏳ *در حال دریافت اطلاعات هنرمند...*")
+            await status_msg.edit(f"⏳ *در حال دریافت اطلاعات هنرمند...*{FOOTER}")
         except:
             pass
     data = await lookup_itunes(artist_id)
@@ -193,7 +198,7 @@ async def crawl_album_tracks(album_id: int, status_msg: Message = None):
         return
     if status_msg:
         try:
-            await status_msg.edit("⏳ *در حال دریافت آهنگ‌های آلبوم...*")
+            await status_msg.edit(f"⏳ *در حال دریافت آهنگ‌های آلبوم...*{FOOTER}")
         except:
             pass
     data = await lookup_itunes(album_id, "song")
@@ -215,7 +220,7 @@ async def get_album(album_id: int, status_msg: Message = None) -> Optional[Dict[
         return cached
     if status_msg:
         try:
-            await status_msg.edit("⏳ *در حال دریافت اطلاعات آلبوم...*")
+            await status_msg.edit(f"⏳ *در حال دریافت اطلاعات آلبوم...*{FOOTER}")
         except:
             pass
     data = await lookup_itunes(album_id)
@@ -232,7 +237,7 @@ async def get_track(track_id: int, status_msg: Message = None) -> Optional[Dict[
         return cached
     if status_msg:
         try:
-            await status_msg.edit("⏳ *در حال دریافت اطلاعات آهنگ...*")
+            await status_msg.edit(f"⏳ *در حال دریافت اطلاعات آهنگ...*{FOOTER}")
         except:
             pass
     data = await lookup_itunes(track_id)
@@ -246,7 +251,7 @@ async def search_youtube_track(query: str) -> Optional[str]:
     """Search YouTube Music and return best video ID."""
     global YT
     if YT is None:
-        YT = YTMusic()  # requires no auth for search
+        YT = YTMusic()  
     try:
         results = YT.search(query, filter="songs", limit=1)
         if results and isinstance(results, list) and len(results) > 0:
@@ -255,28 +260,82 @@ async def search_youtube_track(query: str) -> Optional[str]:
         logger.error(f"YTMusic search error: {e}")
     return None
 
-# ---------- NEW Advanced Download Logic ----------
-async def download_and_send_track(bot: Bot, chat_id: int, video_url: str, track_title: str,
-                                  artist_name: str, cover_url: str):
-    """
-    Download the YT Music track using the 8‑method anti‑detection downloader
-    and send it as an MP3 file to the user.
-    """
-    status_msg = await bot.send_message(chat_id, "⏳ در حال دانلود و آماده‌سازی آهنگ (روش‌های پیشرفته ضد تحریم)...")
+# ---------- Metadata Tagger ----------
+def tag_mp3(file_path: Path, title: str, artist: str, album: str, cover_bytes: bytes):
+    """Add ID3 metadata to the downloaded MP3 file."""
+    try:
+        try:
+            audio = ID3(file_path)
+        except error:
+            audio = ID3()
+        
+        audio.add(TIT2(encoding=3, text=title))
+        audio.add(TPE1(encoding=3, text=artist))
+        if album:
+            audio.add(TALB(encoding=3, text=album))
+        if cover_bytes:
+            audio.add(APIC(
+                encoding=3,
+                mime='image/jpeg',
+                type=3,
+                desc='Cover',
+                data=cover_bytes
+            ))
+        audio.save(file_path, v2_version=3)
+        logger.info(f"Metadata updated successfully for {title}")
+    except Exception as e:
+        logger.error(f"Failed to tag MP3 {file_path}: {e}")
+
+# ---------- Download & Caching Logic ----------
+async def send_cached_or_download(bot: Bot, chat_id: int, track_id: int):
+    status_msg = await bot.send_message(chat_id, f"⏳ *در حال آماده‌سازی دانلود از {BOT_NAME}...*{FOOTER}")
+    
+    # Check if already cached in DB Channel
+    channel_msg_id = await get_audio_cache(track_id)
+    if channel_msg_id and DB_CHANNEL_ID:
+        try:
+            # Forward directly from database channel to the user
+            await bot.forward_message(chat_id, from_chat_id=DB_CHANNEL_ID, message_id=channel_msg_id)
+            await status_msg.edit(f"✅ آهنگ با موفقیت از دیتابیس {BOT_NAME} دریافت شد.{FOOTER}")
+            return
+        except Exception as e:
+            logger.error(f"Forward failed: {e}, will re-download")
+
+    # If not cached, fetch track info for downloading
+    track_data = await get_track(track_id, status_msg)
+    if not track_data or not track_data.get("results"):
+        await status_msg.edit(f"❌ خطا در دریافت اطلاعات آهنگ.{FOOTER}")
+        return
+    
+    track = track_data["results"][0]
+    t_name = track.get("trackName", "Unknown Title")
+    a_name = track.get("artistName", "Unknown Artist")
+    album_name = track.get("collectionName", "")
+    cover_url = get_high_res_artwork(track.get("artworkUrl100"), size=600)
+
+    query = f"{t_name} {a_name}"
+    await status_msg.edit(f"🔍 جستجوی سورس باکیفیت آهنگ در یوتیوب موزیک...{FOOTER}")
+    
+    video_id = await search_youtube_track(query)
+    if not video_id:
+        await status_msg.edit(f"❌ نتوانستیم لینک یوتیوب موزیک را برای این آهنگ پیدا کنیم.{FOOTER}")
+        return
+    video_url = f"https://music.youtube.com/watch?v={video_id}"
+
+    await status_msg.edit(f"⏳ در حال دانلود و آماده‌سازی آهنگ (روش‌های پیشرفته ضد تحریم)...{FOOTER}")
 
     try:
-        # Use the robust download_audio function – it returns a Path to the MP3 file
         mp3_path = await asyncio.get_event_loop().run_in_executor(
             None, download_audio, video_url
         )
 
         if mp3_path is None:
-            await status_msg.edit("❌ دانلود با شکست مواجه شد — همه ۸ روش ناموفق بودند.")
+            await status_msg.edit(f"❌ دانلود با شکست مواجه شد — همه ۸ روش ناموفق بودند.{FOOTER}")
             return
 
         file_size_mb = mp3_path.stat().st_size / (1024 * 1024)
 
-        # Download cover image if available
+        # Download cover image
         cover_bytes = None
         if cover_url:
             async with aiohttp.ClientSession() as session:
@@ -284,80 +343,85 @@ async def download_and_send_track(bot: Bot, chat_id: int, video_url: str, track_
                     if resp.status == 200:
                         cover_bytes = await resp.read()
 
-        caption = f"🎵 {track_title}\n🎤 {artist_name}\n🔊 MP3 320 kbps | {file_size_mb:.1f} MB"
+        # Update metadata using mutagen
+        await asyncio.get_event_loop().run_in_executor(
+            None, tag_mp3, mp3_path, t_name, a_name, album_name, cover_bytes
+        )
 
-        with open(mp3_path, "rb") as f:
-            audio_input = InputFile(f.read(), file_name=f"{track_title}.mp3")
-            if cover_bytes:
-                thumb_input = InputFile(cover_bytes, file_name="cover.jpg")
+        caption = f"🎵 {t_name}\n🎤 {a_name}\n📀 {album_name}\n🔊 MP3 320 kbps | {file_size_mb:.1f} MB{FOOTER}"
+
+        # Upload the tagged file to the DB_CHANNEL_ID first (if exists)
+        if DB_CHANNEL_ID:
+            try:
+                await status_msg.edit(f"☁️ در حال آپلود در سرورهای ابری {BOT_NAME}...{FOOTER}")
+                with open(mp3_path, "rb") as f:
+                    audio_bytes = f.read()
+                
+                audio_input = InputFile(audio_bytes, file_name=f"{t_name} - {a_name}.mp3")
+                db_msg = await bot.send_audio(
+                    DB_CHANNEL_ID,
+                    audio=audio_input,
+                    caption=caption
+                )
+                
+                if db_msg and db_msg.message_id:
+                    # Cache successful, save ID
+                    await set_audio_cache(track_id, db_msg.message_id)
+                    # Forward to User
+                    await bot.forward_message(chat_id, from_chat_id=DB_CHANNEL_ID, message_id=db_msg.message_id)
+                    await status_msg.edit(f"✅ دانلود و پردازش با موفقیت انجام شد.{FOOTER}")
+            except Exception as e:
+                logger.error(f"Error caching to DB_CHANNEL: {e}")
+                # Fallback: Send directly to user if DB Channel upload fails
+                with open(mp3_path, "rb") as f:
+                    audio_bytes = f.read()
+                audio_input = InputFile(audio_bytes, file_name=f"{t_name} - {a_name}.mp3")
                 await bot.send_audio(chat_id, audio=audio_input, caption=caption)
-            else:
-                await bot.send_audio(chat_id, audio=audio_input, caption=caption)
+                await status_msg.edit(f"✅ آهنگ مستقیما ارسال شد (خطا در ذخیره دیتابیس).{FOOTER}")
+        else:
+            # If no DB_CHANNEL_ID is configured, send directly to user
+            with open(mp3_path, "rb") as f:
+                audio_bytes = f.read()
+            audio_input = InputFile(audio_bytes, file_name=f"{t_name} - {a_name}.mp3")
+            await bot.send_audio(chat_id, audio=audio_input, caption=caption)
+            await status_msg.edit(f"✅ دانلود و ارسال با موفقیت انجام شد.{FOOTER}")
 
         # Clean up temp file
         mp3_path.unlink(missing_ok=True)
-        await status_msg.edit("✅ آهنگ با موفقیت ارسال شد.")
 
     except Exception as e:
         logger.exception("Download error")
-        await status_msg.edit(f"❌ خطا: {e}")
+        await status_msg.edit(f"❌ خطا در عملیات: {e}{FOOTER}")
 
-
-async def send_cached_or_download(bot: Bot, chat_id: int, track_id: int):
-    """Check audio cache channel, forward if exists; else download and optionally cache."""
-    status_msg = await bot.send_message(chat_id, "⏳ *در حال آماده‌سازی دانلود...*")
-    track_data = await get_track(track_id, status_msg)
+async def send_voice_preview(chat_id: int, track_id: int):
+    status_msg = await bot.send_message(chat_id, f"⏳ در حال دریافت پیش‌نمایش...{FOOTER}")
+    track_data = await get_track(track_id)
     if not track_data or not track_data.get("results"):
-        await status_msg.edit("❌ خطا در دریافت اطلاعات آهنگ.")
+        await status_msg.edit(f"❌ اطلاعات آهنگ یافت نشد.{FOOTER}")
         return
+    
     track = track_data["results"][0]
-    t_name = track.get("trackName", "")
-    a_name = track.get("artistName", "")
-    cover_url = get_high_res_artwork(track.get("artworkUrl100"))
-
-    # Check if already cached in channel
-    channel_msg_id = await get_audio_cache(track_id)
-    if channel_msg_id and CACHE_CHANNEL_ID:
-        try:
-            await bot.forward_message(chat_id, from_chat_id=CACHE_CHANNEL_ID, message_id=channel_msg_id)
-            await status_msg.edit("✅ آهنگ از حافظه کش ارسال شد.")
-            return
-        except Exception as e:
-            logger.error(f"Forward failed: {e}, will re-download")
-
-    # Need to download
-    query = f"{t_name} {a_name}"
-    video_id = await search_youtube_track(query)
-    if not video_id:
-        await status_msg.edit("❌ نتوانستیم لینک یوتیوب موزیک را پیدا کنیم.")
+    preview_url = track.get("previewUrl")
+    if not preview_url:
+        await status_msg.edit(f"❌ متاسفانه پیش‌نمایشی برای این آهنگ موجود نیست.{FOOTER}")
         return
-    video_url = f"https://music.youtube.com/watch?v={video_id}"
 
-    # Send to user
-    await download_and_send_track(bot, chat_id, video_url, t_name, a_name, cover_url)
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(preview_url) as resp:
+                if resp.status == 200:
+                    audio_bytes = await resp.read()
+                    voice_input = InputFile(audio_bytes, file_name="preview.m4a")
+                    await bot.send_voice(chat_id, voice=voice_input, caption=f"🎧 پیش‌نمایش صوتی آهنگ {track.get('trackName')}{FOOTER}")
+                    await status_msg.delete()
+                else:
+                    await status_msg.edit(f"❌ خطا در ارتباط با سرور آیتیونز.{FOOTER}")
+    except Exception as e:
+        logger.error(f"Failed to send audio preview: {e}")
+        await status_msg.edit(f"❌ خطا در ارسال پیش‌نمایش.{FOOTER}")
 
-    # Optionally cache in the channel by re‑downloading and uploading
-    if CACHE_CHANNEL_ID:
-        try:
-            logger.info(f"Caching audio for track {track_id} in channel")
-            mp3_path = await asyncio.get_event_loop().run_in_executor(
-                None, download_audio, video_url
-            )
-            if mp3_path:
-                with open(mp3_path, "rb") as f:
-                    audio_bytes = f.read()
-                sent_msg = await bot.send_audio(
-                    CACHE_CHANNEL_ID,
-                    audio=InputFile(audio_bytes, file_name=f"{t_name}.mp3"),
-                    caption=f"🎵 {t_name}\n🎤 {a_name}"
-                )
-                if sent_msg and sent_msg.message_id:
-                    await set_audio_cache(track_id, sent_msg.message_id)
-                mp3_path.unlink(missing_ok=True)
-        except Exception as e:
-            logger.error(f"Failed to cache audio in channel: {e}")
 
-# ---------- Helper functions (unchanged) ----------
+# ---------- Helper functions ----------
 def format_duration(milliseconds: int) -> str:
     if not milliseconds:
         return "نامشخص"
@@ -382,12 +446,12 @@ def create_pagination_row(callback_prefix: str, current_page: int, total_pages: 
 def generate_search_hash(type_: str, term: str) -> str:
     return hashlib.md5(f"{type_}:{term}".encode()).hexdigest()[:10]
 
-# ---------- Bale Bot Handlers ----------
+# ---------- Bale Bot Initialization & Handlers ----------
 bot = Bot(token=BOT_TOKEN)
 
 @bot.event
 async def on_ready():
-    logger.info(f"{bot.user.username} is ready and connected to Bale!")
+    logger.info(f"{bot.user.username} (Abraava) is ready and connected to Bale!")
     await bot.delete_webhook()
     await init_db()
 
@@ -395,33 +459,67 @@ async def on_ready():
 async def on_message(message: Message):
     if not message.content:
         return
-    if message.content.startswith("/start"):
+
+    # Handle Group / Channel tagging logic
+    is_group = message.chat.type in ["group", "supergroup", "channel"]
+    msg_text = message.content
+
+    if is_group:
+        bot_mention = f"@{bot.user.username}"
+        if bot_mention not in msg_text:
+            return  # Ignore messages in groups if bot is not explicitly mentioned
+        msg_text = msg_text.replace(bot_mention, "").strip()
+    
+    # Command Handlers
+    if msg_text.startswith("/start"):
         await message.reply(
-            "🎵 *به ربات جستجوی موسیقی iTunes خوش آمدید!*\n\n"
+            f"🎵 *به ربات جستجو و دانلود موسیقی {BOT_NAME} خوش آمدید!*\n\n"
             "*دستورات:*\n"
             "`/search artist:<نام>` - جستجوی هنرمند\n"
             "`/search album:<نام>` - جستجوی آلبوم\n"
             "`/search track:<نام>` - جستجوی آهنگ\n"
-            "`/search <نام>` - جستجوی ترکیبی (همه موارد)\n\n"
+            "`/search <نام>` - جستجوی ترکیبی\n\n"
             "*ویژگی‌ها:*\n"
-            "• کش شدن هوشمند اطلاعات\n"
-            "• پخش پیش‌نمایش صوتی آهنگ‌ها\n"
-            "• دریافت کاور اورجینال با کیفیت بالا\n"
-            "• دانلود مستقیم آهنگ از یوتیوب موزیک (ضد تحریم)\n"
-            "• جستجوی ترکیبی بدون فیلتر\n"
+            "• کش شدن و دیتابیس اختصاصی (ارسال فوری)\n"
+            "• ثبت خودکار متادیتا (کاور، نام و خواننده) روی آهنگ\n"
+            "• پخش پیش‌نمایش صوتی با لمس دکمه\n"
+            "• دانلود سورس اورجینال از یوتیوب موزیک (ضد تحریم)\n"
             "  🔊 MP3 320 kbps | ۸ روش عبور از تشخیص ربات"
+            f"{FOOTER}"
         )
-    elif message.content.startswith("/search"):
-        parts = message.content.split(" ", 1)
+    elif msg_text.startswith("/help"):
+        await message.reply(
+            f"🛠 *راهنمای استفاده از {BOT_NAME}*\n\n"
+            "برای جستجوی موزیک کافیست از دستور `/search` استفاده کنید.\n"
+            "مثال: `/search ed sheeran`\n\n"
+            "⚠️ اگر می‌خواهید ربات را در گروه‌ها استفاده کنید، حتما باید آیدی ربات را تگ کنید:\n"
+            f"`@{bot.user.username} /search hello`"
+            f"{FOOTER}"
+        )
+    elif msg_text.startswith("/about"):
+        await message.reply(
+            f"ℹ️ *درباره ربات {BOT_NAME}*\n\n"
+            f"این ربات یک دستیار هوشمند برای جستجو در دیتابیس عظیم iTunes و دانلود باکیفیت‌ترین سورس موجود از YouTube Music به صورت ضدتحریم می‌باشد.\n"
+            f"تمامی آهنگ‌ها پیش از ارسال توسط سرورهای ما پردازش و تگ‌گذاری (کاور و اطلاعات) می‌شوند."
+            f"{FOOTER}"
+        )
+    elif msg_text.startswith("/setting"):
+        await message.reply(
+            f"⚙️ *تنظیمات ربات {BOT_NAME}*\n\n"
+            "در حال حاضر تنظیمات خاصی برای پیکربندی وجود ندارد و ربات در بهترین حالت کیفی (MP3 320kbps) تنظیم شده است."
+            f"{FOOTER}"
+        )
+    elif msg_text.startswith("/search"):
+        parts = msg_text.split(" ", 1)
         if len(parts) < 2:
-            await message.reply("❌ *لطفاً عبارت جستجو را وارد کنید.*\nمثال: `/search artist:Taylor Swift` یا `/search hello`")
+            await message.reply(f"❌ *لطفاً عبارت جستجو را وارد کنید.*\nمثال: `/search artist:Taylor Swift` یا `/search hello`{FOOTER}")
             return
         query = parts[1].strip()
         if ":" in query:
             type_, term = query.split(":", 1)
             type_ = type_.lower()
             if type_ not in ["artist", "album", "track"]:
-                await message.reply("❌ *نوع جستجو نامعتبر است.*\nیکی از گزینه‌های `artist`, `album`, `track` را انتخاب کنید.")
+                await message.reply(f"❌ *نوع جستجو نامعتبر است.*\nیکی از گزینه‌های `artist`, `album`, `track` را انتخاب کنید.{FOOTER}")
                 return
         else:
             type_ = "all"
@@ -429,7 +527,7 @@ async def on_message(message: Message):
 
         entity_map = {"artist": "musicArtist", "album": "album", "track": "musicTrack"}
         type_fa_map = {"artist": "هنرمند", "album": "آلبوم", "track": "آهنگ", "all": "همه"}
-        status_msg = await message.reply(f"🔍 *در حال جستجوی {type_fa_map[type_]}: {term}...*")
+        status_msg = await message.reply(f"🔍 *در حال جستجوی {type_fa_map[type_]}: {term}...*{FOOTER}")
 
         search_id = generate_search_hash(type_, term)
         cache_key = f"search:{search_id}"
@@ -442,7 +540,7 @@ async def on_message(message: Message):
         if results and results.get("resultCount", 0) > 0:
             await set_cached(cache_key, "search", {"type": type_, "term": term, "data": results})
         else:
-            await status_msg.edit(f"❌ *هیچ نتیجه‌ای برای '{term}' یافت نشد.*")
+            await status_msg.edit(f"❌ *هیچ نتیجه‌ای برای '{term}' یافت نشد.*{FOOTER}")
             return
 
         await status_msg.delete()
@@ -452,7 +550,7 @@ async def send_search_page(chat_id: int, search_id: str, page: int, message_to_e
     cache_key = f"search:{search_id}"
     cache_data = await get_cached(cache_key)
     if not cache_data:
-        text = "❌ خطایی در بارگذاری نتایج رخ داد (احتمالا سشن منقضی شده است)."
+        text = f"❌ خطایی در بارگذاری نتایج رخ داد (احتمالا سشن منقضی شده است).{FOOTER}"
         if message_to_edit:
             await message_to_edit.edit(text)
         else:
@@ -508,7 +606,7 @@ async def send_search_page(chat_id: int, search_id: str, page: int, message_to_e
             markup.add(btn, row=len(page_items) + 1)
     markup.add(InlineKeyboardButton(text="🔍 جستجوی جدید", callback_data="new_search"), row=len(page_items) + 2)
 
-    text = header
+    text = header + FOOTER
     if message_to_edit:
         try:
             await message_to_edit.edit(text, components=markup)
@@ -527,7 +625,7 @@ async def on_callback(callback: CallbackQuery):
         return
     if data == "new_search":
         await bot.send_message(chat_id,
-                               "🔍 لطفاً عبارت جستجوی خود را با فرمت زیر وارد کنید:\n`/search <نوع:>عبارت`\nمثلاً `/search artist:ed sheeran` یا `/search hello`")
+                               f"🔍 لطفاً عبارت جستجوی خود را با فرمت زیر وارد کنید:\n`/search <نوع:>عبارت`\nمثلاً `/search artist:ed sheeran` یا `/search hello`{FOOTER}")
         return
     try:
         parts = data.split(":")
@@ -554,6 +652,10 @@ async def on_callback(callback: CallbackQuery):
             track_id = int(parts[1])
             await send_cached_or_download(bot, chat_id, track_id)
 
+        elif data.startswith("preview:"):
+            track_id = int(parts[1])
+            await send_voice_preview(chat_id, track_id)
+
         elif data.startswith("recrawl:"):
             type_ = parts[1]
             id_ = int(parts[2])
@@ -574,7 +676,7 @@ async def on_callback(callback: CallbackQuery):
             page = int(parts[2]) if len(parts) > 2 else 1
             artist_data = await get_artist(artist_id)
             if not artist_data or not artist_data.get("results"):
-                await bot.send_message(chat_id, "❌ هنرمند یافت نشد.")
+                await bot.send_message(chat_id, f"❌ هنرمند یافت نشد.{FOOTER}")
                 return
             artist_name = artist_data["results"][0].get("artistName", "نامشخص")
             search_id = generate_search_hash("track", artist_name)
@@ -584,16 +686,16 @@ async def on_callback(callback: CallbackQuery):
                 await set_cached(cache_key, "search", {"type": "track", "term": artist_name, "data": results})
                 await send_search_page(chat_id, search_id, page, callback.message)
             else:
-                await bot.send_message(chat_id, "❌ هیچ آهنگی برای این هنرمند یافت نشد.")
+                await bot.send_message(chat_id, f"❌ هیچ آهنگی برای این هنرمند یافت نشد.{FOOTER}")
 
     except Exception as e:
         logger.error(f"Error handling callback {data}: {e}")
 
 async def show_artist(chat_id: int, artist_id: int, page: int = 1, message_to_edit: Message = None):
-    status_msg = await bot.send_message(chat_id, "🔄 *در حال پردازش هنرمند...*")
+    status_msg = await bot.send_message(chat_id, f"🔄 *در حال پردازش هنرمند...*{FOOTER}")
     data = await get_artist(artist_id, status_msg)
     if not data or not data.get("results"):
-        await status_msg.edit("❌ *هنرمند یافت نشد.*")
+        await status_msg.edit(f"❌ *هنرمند یافت نشد.*{FOOTER}")
         return
     artist = data["results"][0]
     text = f"*🎤 هنرمند:* {artist.get('artistName', 'نامشخص')}\n"
@@ -640,6 +742,7 @@ async def show_artist(chat_id: int, artist_id: int, page: int = 1, message_to_ed
                row=bottom_row + 1)
     markup.add(InlineKeyboardButton(text="🔍 جستجوی جدید", callback_data="new_search"), row=bottom_row + 2)
 
+    text += FOOTER
     await status_msg.delete()
     if message_to_edit:
         try:
@@ -650,10 +753,10 @@ async def show_artist(chat_id: int, artist_id: int, page: int = 1, message_to_ed
         await bot.send_message(chat_id, text, components=markup)
 
 async def show_album(chat_id: int, album_id: int, page: int = 1, message_to_edit: Message = None):
-    status_msg = await bot.send_message(chat_id, "🔄 *در حال پردازش آلبوم...*")
+    status_msg = await bot.send_message(chat_id, f"🔄 *در حال پردازش آلبوم...*{FOOTER}")
     data = await get_album(album_id, status_msg)
     if not data or not data.get("results"):
-        await status_msg.edit("❌ *آلبوم یافت نشد.*")
+        await status_msg.edit(f"❌ *آلبوم یافت نشد.*{FOOTER}")
         return
     album = data["results"][0]
     release_date = album.get('releaseDate', 'نامشخص')[:10] if album.get('releaseDate') else 'نامشخص'
@@ -707,6 +810,7 @@ async def show_album(chat_id: int, album_id: int, page: int = 1, message_to_edit
                row=bottom_row)
     markup.add(InlineKeyboardButton(text="🔍 جستجوی جدید", callback_data="new_search"), row=bottom_row + 1)
 
+    text += FOOTER
     await status_msg.delete()
     artwork_url = get_high_res_artwork(album.get("artworkUrl100"))
     sent_photo = False
@@ -734,10 +838,10 @@ async def show_album(chat_id: int, album_id: int, page: int = 1, message_to_edit
             await bot.send_message(chat_id, text, components=markup)
 
 async def show_track(chat_id: int, track_id: int, message_to_edit: Message = None):
-    status_msg = await bot.send_message(chat_id, "🔄 *در حال بارگذاری اطلاعات آهنگ...*")
+    status_msg = await bot.send_message(chat_id, f"🔄 *در حال بارگذاری اطلاعات آهنگ...*{FOOTER}")
     data = await get_track(track_id, status_msg)
     if not data or not data.get("results"):
-        await status_msg.edit("❌ *آهنگ یافت نشد.*")
+        await status_msg.edit(f"❌ *آهنگ یافت نشد.*{FOOTER}")
         return
     track = data["results"][0]
     duration = format_duration(track.get('trackTimeMillis', 0))
@@ -753,14 +857,22 @@ async def show_track(chat_id: int, track_id: int, message_to_edit: Message = Non
 
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton(text="⬇️ دانلود کامل آهنگ (320 kbps)", callback_data=f"download:{track_id}"), row=1)
+    
     row = 2
+    # Add Preview button ONLY if previewUrl exists
+    if track.get("previewUrl"):
+        markup.add(InlineKeyboardButton(text="🎧 پیش‌نمایش", callback_data=f"preview:{track_id}"), row=row)
+        row += 1
+
     if track.get('collectionId'):
         markup.add(InlineKeyboardButton(text="📀 مشاهده آلبوم", callback_data=f"album:{track['collectionId']}:1"), row=row)
     if track.get('artistId'):
         markup.add(InlineKeyboardButton(text="🎤 مشاهده هنرمند", callback_data=f"artist:{track['artistId']}:1"), row=row)
+    
     markup.add(InlineKeyboardButton(text="🔄 تازه‌سازی", callback_data=f"recrawl:track:{track_id}"), row=row + 1)
     markup.add(InlineKeyboardButton(text="🔍 جستجوی جدید", callback_data="new_search"), row=row + 2)
 
+    text += FOOTER
     await status_msg.delete()
 
     artwork_url = get_high_res_artwork(track.get("artworkUrl100"))
@@ -788,18 +900,7 @@ async def show_track(chat_id: int, track_id: int, message_to_edit: Message = Non
         else:
             await bot.send_message(chat_id, text, components=markup)
 
-    preview_url = track.get("previewUrl")
-    if preview_url:
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(preview_url) as resp:
-                    if resp.status == 200:
-                        audio_bytes = await resp.read()
-                        audio_input = InputFile(audio_bytes, file_name="preview.m4a")
-                        await bot.send_audio(chat_id, audio=audio_input, caption="🎧 پیش‌نمایش صوتی ۳۰ ثانیه‌ای")
-        except Exception as e:
-            logger.error(f"Failed to send audio preview: {e}")
 
 if __name__ == "__main__":
-    logger.info("🎵 iTunes Music Bot Starting (with anti‑detection downloader)...")
+    logger.info(f"🎵 {BOT_NAME} Music Bot Starting (with anti‑detection & tagging)...")
     bot.run()
