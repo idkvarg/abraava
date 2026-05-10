@@ -354,10 +354,7 @@ async def send_cached_or_download(bot: Bot, chat_id: int, track_id: int):
         if DB_CHANNEL_ID:
             try:
                 await status_msg.edit(f"☁️ در حال آپلود در سرورهای ابری {BOT_NAME}...{FOOTER}")
-                with open(mp3_path, "rb") as f:
-                    audio_bytes = f.read()
-                
-                audio_input = InputFile(audio_bytes, file_name=f"{t_name} - {a_name}.mp3")
+                audio_input = InputFile(mp3_path)
                 db_msg = await bot.send_audio(
                     6053683389,
                     audio=audio_input,
@@ -372,17 +369,11 @@ async def send_cached_or_download(bot: Bot, chat_id: int, track_id: int):
                     await status_msg.edit(f"✅ دانلود و پردازش با موفقیت انجام شد.{FOOTER}")
             except Exception as e:
                 logger.error(f"Error caching to DB_CHANNEL: {e}")
-                # Fallback: Send directly to user if DB Channel upload fails
-                with open(mp3_path, "rb") as f:
-                    audio_bytes = f.read()
-                audio_input = InputFile(audio_bytes, file_name=f"{t_name} - {a_name}.mp3")
+                audio_input = InputFile(mp3_path)
                 await bot.send_audio(chat_id, audio=audio_input, caption=caption)
                 await status_msg.edit(f"✅ آهنگ مستقیما ارسال شد (خطا در ذخیره دیتابیس).{FOOTER}")
         else:
-            # If no DB_CHANNEL_ID is configured, send directly to user
-            with open(mp3_path, "rb") as f:
-                audio_bytes = f.read()
-            audio_input = InputFile(audio_bytes, file_name=f"{t_name} - {a_name}.mp3")
+            audio_input = InputFile(mp3_path)
             await bot.send_audio(chat_id, audio=audio_input, caption=caption)
             await status_msg.edit(f"✅ دانلود و ارسال با موفقیت انجام شد.{FOOTER}")
 
