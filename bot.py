@@ -258,6 +258,7 @@ async def download_and_send_track(bot: Bot, chat_id: int, video_url: str, track_
             'format': 'bestaudio/best',
             'outtmpl': temp_audio_file.replace('.mp3', ''),
             'quiet': True,
+            'cookiefile':'cookies.txt',
             'no_warnings': True,
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
@@ -351,6 +352,7 @@ async def send_cached_or_download(bot: Bot, chat_id: int, track_id: int):
             ydl_opts = {
                 'format': 'bestaudio/best',
                 'outtmpl': temp_file.replace('.mp3', ''),
+            'cookiefile':'cookies.txt',
                 'quiet': True,
                 'no_warnings': True,
                 'postprocessors': [{
