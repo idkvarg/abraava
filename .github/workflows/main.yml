@@ -70,4 +70,4 @@ jobs:
       - name: Run bot
         env:
           BALE_BOT_TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
-        run: python bale_music_bot.py
+        run: python bot.py
