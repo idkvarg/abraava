@@ -1,34 +1,35 @@
-import os
-import sys
 import logging
-from cachetools import TTLCache
 import os
-from dotenv import load_dotenv
+from typing import Optional
 
-load_dotenv()
+import aiohttp
 
-TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
-SPOTIPY_CLIENT_ID = os.getenv("SPOTIPY_CLIENT_ID")
-SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIPY_CLIENT_SECRET")
+BOT_NAME = "ابرآوا"
+BOT_USERNAME = "@abraava_bot"
+INFO_CHANNEL_USERNAME = "@abraava"
+FOOTER = '\n\n' + BOT_USERNAME + '\n' + INFO_CHANNEL_USERNAME
+# PROXY_URL = "http://127.0.0.1:8085"        # change if needed
+# VERIFY_SSL = False
 
-logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO").upper(),
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-)
+ITUNES_BASE_URL = "https://itunes.apple.com"
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "1011430416:5JY8CU9nGwYtVz0ahfDEIkJyCkVTUCAhLXQ")
+DB_CHANNEL_ID = os.environ.get("DB_CHANNEL_ID", None)  # Github Secret: DB_CHANNEL_ID
+ITEMS_PER_PAGE = 10
+OFFLINE_MODE = os.environ.get("OFFLINE_MODE", "false").lower() in ("true", "1", "yes")
+logger = logging.getLogger("ABRAAVA")
 
-logger = logging.getLogger("abraava")
 
-SEARCH_CACHE = TTLCache(maxsize=1000, ttl=3600)
-DOWNLOAD_LINKS_CACHE = TTLCache(maxsize=1000, ttl=3600)
+class HttpClient:
+    session: Optional[aiohttp.ClientSession] = None
 
-YTDL_EXTRACT_OPTS = {"quiet": True, "extract_flat": True, "skip_download": True}
-YTDL_DOWNLOAD_OPTS = {
-    "format": "bestaudio/best",
-    "quiet": True,
-    "noplaylist": True,
-    "postprocessors": [{
-        "key": "FFmpegExtractAudio",
-        "preferredcodec": "mp3",
-        "preferredquality": "192"
-    }],
-}
+    @classmethod
+    async def get_session(cls):
+        if cls.session is None or cls.session.closed:
+            connector = aiohttp.TCPConnector()
+            cls.session = aiohttp.ClientSession(connector=connector)
+        return cls.session
+
+    @classmethod
+    async def close(cls):
+        if cls.session and not cls.session.closed:
+            await cls.session.close()

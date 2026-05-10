@@ -1,47 +1,32 @@
-import json
-import re
-import urllib.parse
-from typing import Any, Tuple, Optional
+import logging
+from pathlib import Path
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from mutagen.id3 import ID3, TIT2, TPE1, TALB, APIC
+
+logger = logging.getLogger("ABRAAVA:TAGEDITOR")
 
 
-def extract_url(text: str) -> Optional[str]:
-    url_pattern = re.compile(r'(https?://[^\s]+)')
-    match = url_pattern.search(text)
-    if match:
-        url = match.group(0)
+def tag_mp3(file_path: Path, title: str, artist: str, album: str, cover_bytes: bytes):
+    """Add ID3 metadata to the downloaded MP3 file."""
+    try:
         try:
-            result = urllib.parse.urlparse(url)
-            if all([result.scheme, result.netloc]):
-                return url
-        except ValueError:
-            return False
-    return False
+            audio = ID3(file_path)
+        except error:
+            audio = ID3()
 
-
-def cb_make(prefix: str, payload: str) -> str:
-    """Create compact callback_data: prefix|payload"""
-    full_data = f"{prefix}|{payload}"
-    if len(full_data.encode("utf-8")) > 64:
-        max_payload_length = 64 - len(prefix.encode("utf-8")) - 1
-        payload = payload.encode("utf-8")[:max_payload_length].decode("utf-8", "ignore")
-    return f"{prefix}|{payload}"
-
-
-def cb_parse(data: str) -> Tuple[str, str]:
-    if "|" not in data:
-        return data, ""
-    return data.split("|", 1)
-
-
-def safe_json_loads_text(content: str) -> Any:
-    return json.loads(content)
-
-
-def convert_results_to_buttons(results):
-    buttons = []
-    for result in results:
-        buttons.append([InlineKeyboardButton("🎵 " + result['title'] + " - " + result["artist"],
-                                             callback_data=cb_make("info", result['url']))])
-    return buttons
+        audio.add(TIT2(encoding=3, text=title))
+        audio.add(TPE1(encoding=3, text=artist))
+        if album:
+            audio.add(TALB(encoding=3, text=album))
+        if cover_bytes:
+            audio.add(APIC(
+                encoding=3,
+                mime='image/jpeg',
+                type=3,
+                desc='Cover',
+                data=cover_bytes
+            ))
+        audio.save(file_path, v2_version=3)
+        logger.info(f"Metadata updated successfully for {title}")
+    except Exception as e:
+        logger.error(f"Failed to tag MP3 {file_path}: {e}")
