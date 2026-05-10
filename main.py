@@ -167,7 +167,7 @@ async def send_audio_with_retry(bot: Client, chat_id: int, audio_path: str, file
     last_exception = None
     audio_path = str(audio_path)
     logger.info(f"Sending audio: {audio_path}")
-    audio_path = audio_path.split("BufferedReader name='")[1];
+    audio_path = audio_path + " .";
     logger.info(f"Sending audio: {audio_path}")
     logger.error(f"YTMusic search error: {e}")
     for attempt in range(1, max_retries + 1):
