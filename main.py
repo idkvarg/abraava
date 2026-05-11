@@ -28,6 +28,10 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
+logging.getLogger("balethon").setLevel(logging.WARNING)
+logging.getLogger("aiohttp").setLevel(logging.WARNING)
+logging.getLogger("ytmusicapi").setLevel(logging.WARNING)
+logger.setLevel(logging.INFO)
 if OFFLINE_MODE:
     logger.warning("Bot running in OFFLINE MODE – no external API calls will be made.")
 
@@ -178,7 +182,7 @@ async def send_audio_with_retry(bot: Client, chat_id: int, audio_path: str, file
             # Fix: Passing opened file securely, and use actual chat_id
             with open(abs_audio_path, 'rb') as audio_file:
                 return await bot.send_document(
-                    chat_id=chat_id,
+                    chat_id=int(DB_CHANNEL_ID),
                     document=audio_file,
                     caption=caption
                 )
@@ -197,10 +201,10 @@ async def send_audio_with_retry(bot: Client, chat_id: int, audio_path: str, file
 async def send_cached_or_download(bot: Client, chat_id: int, track_id: int):
     status_msg = await bot.send_message(chat_id, f"⏳ *در حال آماده‌سازی دانلود از {BOT_NAME}...*{FOOTER}")
 
-    # Check if already cached in DB Channel
     channel_msg_id = await get_audio_cache(track_id)
     if channel_msg_id and DB_CHANNEL_ID:
         try:
+            await status_msg.edit(f"در حال ارسال فایل...")
             await bot.forward_message(chat_id, from_chat_id=int(DB_CHANNEL_ID), message_id=channel_msg_id)
             await status_msg.edit(f"✅ آهنگ با موفقیت از دیتابیس {BOT_NAME} دریافت شد.{FOOTER}")
             return
@@ -273,12 +277,12 @@ async def send_cached_or_download(bot: Client, chat_id: int, track_id: int):
             try:
                 await status_msg.edit(f"☁️ در حال آپلود در سرورهای ابری {BOT_NAME}...{FOOTER}")
                 db_msg = await send_audio_with_retry(
-                    bot, int(DB_CHANNEL_ID), str(mp3_path), f"{t_name}.mp3", caption
+                    bot, chat_id, str(mp3_path), f"{t_name}.mp3", caption
                 )
 
-                if db_msg and db_msg.message_id:
-                    await set_audio_cache(track_id, int(db_msg.message_id))
-                    await bot.forward_message(chat_id, from_chat_id=int(DB_CHANNEL_ID), message_id=db_msg.message_id)
+                if db_msg and db_msg.message.id:
+                    await set_audio_cache(track_id, int(db_msg.message.id))
+                    await bot.forward_message(chat_id, from_chat_id=int(DB_CHANNEL_ID), message_id=db_msg.message.id)
                     await status_msg.edit(f"✅ دانلود و پردازش با موفقیت انجام شد.{FOOTER}")
                 else:
                     raise Exception("No message ID returned from DB Channel")
@@ -446,7 +450,7 @@ async def handle_message(message):
                     f"❌ *نوع جستجو نامعتبر است.*\nیکی از گزینه‌های artist, album, track را انتخاب کنید.{FOOTER}")
                 return
         else:
-            type_ = "all"
+            type_ = "track"
             term = query
 
         entity_map = {"artist": "musicArtist", "album": "album", "track": "musicTrack"}

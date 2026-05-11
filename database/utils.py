@@ -135,8 +135,8 @@ async def get_audio_cache(track_id: int) -> Optional[int]:
     """Get cached balePostId for a track if it exists and is not 0."""
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
-            "SELECT balePostId FROM track WHERE trackId = ? AND balePostId != 0", 
-            (track_id,)
+                "SELECT balePostId FROM track WHERE trackId = ? AND balePostId != 0",
+                (track_id,)
         ) as cursor:
             row = await cursor.fetchone()
             return row[0] if row else None
@@ -151,12 +151,13 @@ async def set_audio_cache(track_id: int, bale_post_id: int):
         )
         await db.commit()
 
+
 async def local_search(term: str, entity: str = "all") -> Optional[Dict[str, Any]]:
     """Search the local relational database for the given term."""
     results = []
     pattern = f"%{term}%"
 
-    if entity in ("artist", "all"):
+    if entity in ("artist"):
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute(
                     "SELECT artistId, artistName, primaryGenreName, artworkUrl100, artistLinkUrl FROM artist WHERE artistName LIKE ? LIMIT ?",
@@ -172,35 +173,56 @@ async def local_search(term: str, entity: str = "all") -> Optional[Dict[str, Any
                         "artistLinkUrl": row[4]
                     })
 
-    if entity in ("album", "all"):
+    if entity in ("album"):
         async with aiosqlite.connect(DB_PATH) as db:
+            # فقط آلبوم‌هایی که بیش از ۱ ترک دارند، با استخراج artistName از فیلد JSON
             async with db.execute(
-                    "SELECT collectionId, artistId, collectionName, artworkUrl100 FROM album WHERE collectionName LIKE ? LIMIT ?",
+                    """
+                    SELECT a.collectionId, a.collectionName, a.artworkUrl100, 
+                           COUNT(t.trackId) as track_count,
+                           json_extract(a.data, '$.artistName') as artistName
+                    FROM album a
+                    LEFT JOIN track t ON a.collectionId = t.collectionId
+                    WHERE a.collectionName LIKE ? 
+                    GROUP BY a.collectionId, a.collectionName, a.artworkUrl100, a.data
+                    HAVING COUNT(t.trackId) > 1
+                    LIMIT ?
+                    """,
                     (pattern, 50)
             ) as cursor:
                 async for row in cursor:
                     results.append({
                         "wrapperType": "collection",
                         "collectionId": row[0],
-                        "artistId": row[1],
-                        "collectionName": row[2],
-                        "artworkUrl100": row[3]
+                        "collectionName": row[1],
+                        "artworkUrl100": row[2],
+                        "trackCount": row[3],
+                        "artistName": row[4]  # artistName از فیلد JSON
                     })
 
-    if entity in ("track", "all"):
+    if entity in ("track"):
         async with aiosqlite.connect(DB_PATH) as db:
+            # استخراج artistName از فیلد JSON برای ترک‌ها
             async with db.execute(
-                    "SELECT trackId, artistId, collectionId, trackName, artworkUrl100 FROM track WHERE trackName LIKE ? LIMIT ?",
+                    """
+                    SELECT trackId, collectionId, trackName, artworkUrl100,
+                           json_extract(data, '$.artistName') as artistName,
+                           json_extract(data, '$.artistId') as artistId
+                    FROM track 
+                    WHERE trackName LIKE ? 
+                    LIMIT ?
+                    """,
                     (pattern, 50)
             ) as cursor:
                 async for row in cursor:
                     results.append({
                         "wrapperType": "track",
                         "trackId": row[0],
-                        "artistId": row[1],
-                        "collectionId": row[2],
-                        "trackName": row[3],
-                        "artworkUrl100": row[4]
+                        "collectionId": row[1],
+                        "trackName": row[2],
+                        "artworkUrl100": row[3],
+                        "artistName": row[4],  # artistName از فیلد JSON
+                        "artistId": row[5]  # artistId از فیلد JSON
                     })
 
     # Trim to overall limit 50 if entity is "all"
