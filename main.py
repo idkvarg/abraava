@@ -278,7 +278,7 @@ async def send_cached_or_download(bot: Client, chat_id: int, track_id: int):
     album_name = track.get("collectionName", "")
     cover_url = get_high_res_artwork(track.get("artworkUrl100"), size=600)
 
-    query = f"{t_name} {a_name} {album_name} {ye}"
+    query = f"{t_name}  {ye} by {a_name}"
     await status_msg.edit(f"🔍 جستجوی سورس باکیفیت آهنگ در یوتیوب موزیک...{FOOTER}")
 
     video_id = await search_youtube_track(query)
