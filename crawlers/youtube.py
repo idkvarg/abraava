@@ -4,7 +4,6 @@ import os
 import sys
 import time
 import logging
-import tempfile
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -17,7 +16,7 @@ logger = logging.getLogger("yt_downloader")
 AUDIO_POSTPROCESSOR = {
     "key": "FFmpegExtractAudio",
     "preferredcodec": "mp3",
-    "preferredquality": "320",
+    "preferredquality": "192",
 }
 
 # ── Common yt‑dlp flags (shared by all methods) ──────────────────────────
@@ -73,13 +72,14 @@ def _build_opts(method: int, output_dir: str) -> dict:
     opts = dict(COMMON_OPTS)
     opts["outtmpl"] = f"{output_dir}/%(title)s.%(ext)s"
     opts["format"] = "bestaudio/best"
+    opts["cookiefile"] = "cookies.txt"
     opts["postprocessors"] = [AUDIO_POSTPROCESSOR]
 
     has_deno = _check_deno()
     proxy = _check_proxy()
 
     # ── Method‑specific extractor args & proxy ────────────────────────
-    if method == 1:
+    if method == 8:
         # web client + deno + remote EJS (GitHub) + proxy
         if proxy:
             opts["proxy"] = proxy
@@ -139,7 +139,7 @@ def _build_opts(method: int, output_dir: str) -> dict:
         # mweb client **no proxy**
         opts["extractor_args"] = {"youtube": {"player_client": ["mweb"]}}
 
-    elif method == 8:
+    elif method == 1:
         # android client (last resort, may give lower quality)
         if proxy:
             opts["proxy"] = proxy
@@ -159,21 +159,29 @@ def download_audio(
         output_dir: Optional[str] = None,
         *,
         max_retries_per_method: int = 1,
-) -> Optional[Path]:
+) -> Optional[str]:  # 🔄 تغییر: حالا string برمی‌گرداند
     """
     Download YouTube audio as 320 kbps MP3.
 
-    Tries all 8 anti‑detection methods in sequence.  Returns the Path
-    to the downloaded MP3 file, or None if every method failed.
+    Tries all 8 anti‑detection methods in sequence. Returns the path
+    to the downloaded MP3 file as a string, or None if every method failed.
     """
     url = _normalize_url(url)
 
+    # استفاده از پوشه فعلی پروژه به جای temp
     if output_dir is None:
-        output_dir = tempfile.mkdtemp(prefix="yt_audio_")
+        # پوشه "downloads" در مسیر فعلی پروژه
+        output_dir = os.path.join(os.getcwd(), "downloads")
     else:
-        os.makedirs(output_dir, exist_ok=True)
+        # اگر مسیر نسبی داده شده، آن را به مسیر مطلق در پروژه تبدیل کن
+        if not os.path.isabs(output_dir):
+            output_dir = os.path.join(os.getcwd(), output_dir)
+    
+    # ایجاد پوشه اگر وجود نداشت
+    os.makedirs(output_dir, exist_ok=True)
 
     logger.info("Starting download: %s", url)
+    logger.info("Output directory: %s", output_dir)
     logger.info("Deno available: %s | Proxy available: %s", _check_deno(), _check_proxy())
 
     # Remember what files existed before so we can identify the new MP3
@@ -198,7 +206,7 @@ def download_audio(
                 mp3_path = max(new_files, key=lambda p: p.stat().st_mtime)
                 size_mb = mp3_path.stat().st_size / (1024 * 1024)
                 logger.info("✅ Success with method %d → %s (%.1f MB)", method, mp3_path.name, size_mb)
-                return mp3_path
+                return str(mp3_path)  # 🔄 تبدیل Path به string
             else:
                 logger.warning("Method %d completed but no MP3 found – retrying…", method)
                 time.sleep(2)

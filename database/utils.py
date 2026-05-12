@@ -24,6 +24,18 @@ async def store_artist(item: dict):
         await db.commit()
 
 
+async def store_user(id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            INSERT OR REPLACE INTO users (id,last_updated)
+            VALUES (?,?)
+        """, (
+            str(id),
+            int(time.time())
+        ))
+        await db.commit()
+
+
 async def store_album(item: dict):
     """Insert or replace an album from iTunes API item into the album table."""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -79,6 +91,16 @@ async def get_artist_db(artist_id: int) -> Optional[Dict[str, Any]]:
     return None
 
 
+async def get_users_db(id: int):
+    """Fetch artist from local DB and return in iTunes lookup format."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT id FROM users WHERE id = ?", (id,)) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                return True
+    return False
+
+
 async def get_album_db(collection_id: int) -> Optional[Dict[str, Any]]:
     """Fetch album from local DB and return in iTunes lookup format."""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -119,6 +141,19 @@ async def set_cached(id: str, type: str, data: Dict[str, Any]):
         await db.commit()
 
 
+async def get_all_users():
+    """Get all unique user IDs from database"""
+    users = set()
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("SELECT DISTINCT id FROM users") as cursor:
+                async for row in cursor:
+                    users.add(row[0])
+    except:
+        pass
+    return list(users)
+
+
 async def delete_cached(id: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("DELETE FROM cache WHERE id = ?", (id,))
@@ -132,16 +167,23 @@ async def is_cached(id: str) -> bool:
 
 
 async def get_audio_cache(track_id: int) -> Optional[int]:
+    """Get cached balePostId for a track if it exists and is not 0."""
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT balePostId FROM tracks WHERE trackId = ?", (track_id,)) as cursor:
+        async with db.execute(
+                "SELECT balePostId FROM track WHERE trackId = ? AND balePostId != 0",
+                (track_id,)
+        ) as cursor:
             row = await cursor.fetchone()
             return row[0] if row else None
 
 
 async def set_audio_cache(track_id: int, bale_post_id: int):
+    """Update the balePostId for an existing track."""
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("INSERT OR REPLACE INTO tracks (trackId, balePostId) VALUES (?, ?)",
-                         (track_id, bale_post_id))
+        await db.execute(
+            "UPDATE track SET balePostId = ? WHERE trackId = ?",
+            (bale_post_id, track_id)
+        )
         await db.commit()
 
 
@@ -150,7 +192,7 @@ async def local_search(term: str, entity: str = "all") -> Optional[Dict[str, Any
     results = []
     pattern = f"%{term}%"
 
-    if entity in ("artist", "all"):
+    if entity in ("artist"):
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute(
                     "SELECT artistId, artistName, primaryGenreName, artworkUrl100, artistLinkUrl FROM artist WHERE artistName LIKE ? LIMIT ?",
@@ -166,35 +208,56 @@ async def local_search(term: str, entity: str = "all") -> Optional[Dict[str, Any
                         "artistLinkUrl": row[4]
                     })
 
-    if entity in ("album", "all"):
+    if entity in ("album"):
         async with aiosqlite.connect(DB_PATH) as db:
+            # فقط آلبوم‌هایی که بیش از ۱ ترک دارند، با استخراج artistName از فیلد JSON
             async with db.execute(
-                    "SELECT collectionId, artistId, collectionName, artworkUrl100 FROM album WHERE collectionName LIKE ? LIMIT ?",
+                    """
+                    SELECT a.collectionId, a.collectionName, a.artworkUrl100, 
+                           COUNT(t.trackId) as track_count,
+                           json_extract(a.data, '$.artistName') as artistName
+                    FROM album a
+                    LEFT JOIN track t ON a.collectionId = t.collectionId
+                    WHERE a.collectionName LIKE ? 
+                    GROUP BY a.collectionId, a.collectionName, a.artworkUrl100, a.data
+                    HAVING COUNT(t.trackId) > 1
+                    LIMIT ?
+                    """,
                     (pattern, 50)
             ) as cursor:
                 async for row in cursor:
                     results.append({
                         "wrapperType": "collection",
                         "collectionId": row[0],
-                        "artistId": row[1],
-                        "collectionName": row[2],
-                        "artworkUrl100": row[3]
+                        "collectionName": row[1],
+                        "artworkUrl100": row[2],
+                        "trackCount": row[3],
+                        "artistName": row[4]  # artistName از فیلد JSON
                     })
 
-    if entity in ("track", "all"):
+    if entity in ("track"):
         async with aiosqlite.connect(DB_PATH) as db:
+            # استخراج artistName از فیلد JSON برای ترک‌ها
             async with db.execute(
-                    "SELECT trackId, artistId, collectionId, trackName, artworkUrl100 FROM track WHERE trackName LIKE ? LIMIT ?",
+                    """
+                    SELECT trackId, collectionId, trackName, artworkUrl100,
+                           json_extract(data, '$.artistName') as artistName,
+                           json_extract(data, '$.artistId') as artistId
+                    FROM track 
+                    WHERE trackName LIKE ? 
+                    LIMIT ?
+                    """,
                     (pattern, 50)
             ) as cursor:
                 async for row in cursor:
                     results.append({
                         "wrapperType": "track",
                         "trackId": row[0],
-                        "artistId": row[1],
-                        "collectionId": row[2],
-                        "trackName": row[3],
-                        "artworkUrl100": row[4]
+                        "collectionId": row[1],
+                        "trackName": row[2],
+                        "artworkUrl100": row[3],
+                        "artistName": row[4],  # artistName از فیلد JSON
+                        "artistId": row[5]  # artistId از فیلد JSON
                     })
 
     # Trim to overall limit 50 if entity is "all"
